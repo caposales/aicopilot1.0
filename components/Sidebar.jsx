@@ -21,7 +21,8 @@ import {
   Settings,
   Menu,
   X,
-  Shield
+  Shield,
+  Users
 } from 'lucide-react'
 import {
   Collapsible,
@@ -41,6 +42,7 @@ const navigation = [
       { name: 'Outbound Agent', href: '/dashboard/agents/outbound' },
     ]
   },
+  { name: 'Contacts', href: '/dashboard/contacts', icon: Users },
   { name: 'Call Logs', href: '/dashboard/call-logs', icon: FileText },
   { name: 'Error Logs', href: '/dashboard/error-logs', icon: AlertTriangle },
   { name: 'Integrations', href: '/dashboard/integrations', icon: Plug },

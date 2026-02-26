@@ -390,13 +390,23 @@ async function handleRoute(request, { params }) {
         interruptSensitivity: body.interruptSensitivity || 'high',
         responseSpeed: body.responseSpeed || 'auto',
         aiCreativity: body.aiCreativity ?? 0.7,
+        // Call Transfer Settings
         callTransferEnabled: body.callTransferEnabled || false,
         callTransferNumber: body.callTransferNumber || '',
+        callTransferConditions: body.callTransferConditions || 'on_request', // 'on_request', 'on_escalation', 'always_offer'
+        callTransferMessage: body.callTransferMessage || 'I\'ll transfer you to a specialist now.',
+        // Calendar Booking Settings
         calendarBookingEnabled: body.calendarBookingEnabled || false,
+        calendarProvider: body.calendarProvider || 'calcom', // 'calcom', 'ghl'
+        calendarEventType: body.calendarEventType || '',
+        bookingConfirmationMessage: body.bookingConfirmationMessage || 'Your appointment has been booked!',
+        // Webhook Settings
         postCallWebhookEnabled: body.postCallWebhookEnabled || false,
         postCallWebhookUrl: body.postCallWebhookUrl || '',
+        // Prompt Settings
         promptTemplateId: body.promptTemplateId || '',
         customPrompt: body.customPrompt || '',
+        // Phone Number
         phoneNumber: body.phoneNumber || null,
         isActive: true,
         createdAt: new Date(),
@@ -404,6 +414,18 @@ async function handleRoute(request, { params }) {
       }
       
       await db.collection('agents').insertOne(agent)
+      
+      // Audit log
+      await logAuditEvent(db, {
+        action: AUDIT_ACTIONS.AGENT_CREATED,
+        userId: user.id,
+        userEmail: user.email,
+        workspaceId: user.workspaceId,
+        targetId: agentId,
+        targetType: 'agent',
+        details: { agentName: agent.name, agentType: agent.agentType }
+      })
+      
       return jsonResponse(agent, 201)
     }
 

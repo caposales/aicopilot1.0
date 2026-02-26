@@ -153,9 +153,28 @@ async function handleRoute(request, { params }) {
       const workspace = await db.collection('workspaces').findOne({ id: user.workspaceId })
       const token = generateToken({ userId: user.id, workspaceId: user.workspaceId, email: user.email })
 
+      // Audit log
+      await logAuditEvent(db, {
+        action: AUDIT_ACTIONS.USER_LOGIN,
+        userId: user.id,
+        userEmail: user.email,
+        workspaceId: user.workspaceId,
+        details: { method: 'email' }
+      })
+
+      // Get admin role
+      const adminRole = getAdminRole(user)
+
       return jsonResponse({
         token,
-        user: { id: user.id, email: user.email, name: user.name, workspaceId: user.workspaceId, role: user.role },
+        user: { 
+          id: user.id, 
+          email: user.email, 
+          name: user.name, 
+          workspaceId: user.workspaceId, 
+          role: user.role,
+          adminRole: adminRole
+        },
         workspace
       })
     }

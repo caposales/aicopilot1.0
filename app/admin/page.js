@@ -2,26 +2,41 @@
 
 import { useState, useEffect } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Users, Phone, Bot, PhoneCall, AlertCircle, Building2 } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
+import { Users, Phone, Bot, PhoneCall, AlertCircle, Building2, Shield, Clock } from 'lucide-react'
 
 export default function AdminDashboard() {
   const [stats, setStats] = useState(null)
+  const [roleInfo, setRoleInfo] = useState(null)
+  const [auditLogs, setAuditLogs] = useState([])
   const [isLoading, setIsLoading] = useState(true)
 
   useEffect(() => {
-    fetchStats()
+    fetchData()
   }, [])
 
-  const fetchStats = async () => {
+  const fetchData = async () => {
     try {
       const token = localStorage.getItem('auth_token')
-      const res = await fetch('/api/admin/stats', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      })
-      const data = await res.json()
-      setStats(data)
+      const headers = { 'Authorization': `Bearer ${token}` }
+      
+      const [statsRes, roleRes, auditRes] = await Promise.all([
+        fetch('/api/admin/stats', { headers }),
+        fetch('/api/admin/role', { headers }),
+        fetch('/api/admin/audit-logs?limit=10', { headers })
+      ])
+      
+      const [statsData, roleData, auditData] = await Promise.all([
+        statsRes.json(),
+        roleRes.json(),
+        auditRes.ok ? auditRes.json() : { auditLogs: [] }
+      ])
+      
+      setStats(statsData)
+      setRoleInfo(roleData)
+      setAuditLogs(auditData.auditLogs || [])
     } catch (error) {
-      console.error('Failed to fetch admin stats:', error)
+      console.error('Failed to fetch admin data:', error)
     } finally {
       setIsLoading(false)
     }
@@ -78,13 +93,25 @@ export default function AdminDashboard() {
     }
   ]
 
+  const formatAction = (action) => {
+    return action.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
+  }
+
   return (
     <div className="space-y-8" data-testid="admin-dashboard">
-      <div>
-        <h1 className="text-3xl font-bold text-red-700">Admin Dashboard</h1>
-        <p className="text-muted-foreground mt-1">
-          Platform overview and management
-        </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-red-700">Admin Dashboard</h1>
+          <p className="text-muted-foreground mt-1">
+            Platform overview and management
+          </p>
+        </div>
+        {roleInfo && (
+          <Badge variant={roleInfo.isSuperAdmin ? 'destructive' : 'secondary'} className="text-sm py-1 px-3">
+            <Shield className="w-4 h-4 mr-1" />
+            {roleInfo.isSuperAdmin ? 'Super Admin' : 'Moderator'}
+          </Badge>
+        )}
       </div>
 
       {/* Stats Grid */}
@@ -148,25 +175,31 @@ export default function AdminDashboard() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Recent Calls</CardTitle>
-            <CardDescription>Latest call activity</CardDescription>
+            <CardTitle className="flex items-center gap-2">
+              <Clock className="w-4 h-4" />
+              Recent Activity
+            </CardTitle>
+            <CardDescription>Latest audit log events</CardDescription>
           </CardHeader>
           <CardContent>
-            {stats?.recentCalls?.length > 0 ? (
+            {auditLogs.length > 0 ? (
               <div className="space-y-3">
-                {stats.recentCalls.map((call) => (
-                  <div key={call.id} className="flex items-center gap-3 text-sm">
-                    <PhoneCall className="w-4 h-4 text-muted-foreground" />
-                    <span>{call.from} → {call.to}</span>
-                    <span className="text-muted-foreground ml-auto">
-                      {new Date(call.createdAt).toLocaleDateString()}
+                {auditLogs.slice(0, 5).map((log) => (
+                  <div key={log.id} className="flex items-start gap-3 text-sm">
+                    <div className="w-2 h-2 rounded-full bg-blue-500 mt-2" />
+                    <div className="flex-1">
+                      <p className="font-medium">{formatAction(log.action)}</p>
+                      <p className="text-xs text-muted-foreground">{log.userEmail}</p>
+                    </div>
+                    <span className="text-xs text-muted-foreground">
+                      {new Date(log.createdAt).toLocaleTimeString()}
                     </span>
                   </div>
                 ))}
               </div>
             ) : (
               <p className="text-sm text-muted-foreground">
-                No calls yet.
+                No recent activity.
               </p>
             )}
           </CardContent>

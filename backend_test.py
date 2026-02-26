@@ -1084,7 +1084,11 @@ class APITester:
         # Admin endpoints
         print(f"\n{Colors.BLUE}=== Admin Management Tests ==={Colors.ENDC}")
         self.test_admin_stats_endpoint()
+        self.test_admin_role_endpoint()
         self.test_admin_users_list()
+        self.test_admin_invite_endpoint()
+        self.test_admin_clients_list()
+        self.test_admin_audit_logs()
         self.test_admin_agents_list()
         self.test_admin_call_logs_list()
         self.test_admin_error_logs_list()

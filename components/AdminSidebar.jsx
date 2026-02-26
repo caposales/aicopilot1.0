@@ -1,12 +1,13 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
+import { Badge } from '@/components/ui/badge'
 import {
   LayoutDashboard,
   Users,
@@ -15,19 +16,25 @@ import {
   LogOut,
   Menu,
   X,
-  ArrowLeft
+  ArrowLeft,
+  Building2,
+  Clock,
+  Crown
 } from 'lucide-react'
 
 const navigation = [
-  { name: 'Admin Dashboard', href: '/admin', icon: LayoutDashboard },
-  { name: 'User Management', href: '/admin/users', icon: Users },
-  { name: 'Content Management', href: '/admin/content', icon: FolderOpen },
+  { name: 'Dashboard', href: '/admin', icon: LayoutDashboard },
+  { name: 'Users', href: '/admin/users', icon: Users },
+  { name: 'Clients', href: '/admin/clients', icon: Building2 },
+  { name: 'Content', href: '/admin/content', icon: FolderOpen },
+  { name: 'Audit Logs', href: '/admin/audit-logs', icon: Clock },
 ]
 
 export default function AdminSidebar() {
   const pathname = usePathname()
   const router = useRouter()
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [roleInfo, setRoleInfo] = useState(null)
   const [user, setUser] = useState(() => {
     if (typeof window !== 'undefined') {
       const stored = localStorage.getItem('user')
@@ -35,6 +42,25 @@ export default function AdminSidebar() {
     }
     return null
   })
+
+  useEffect(() => {
+    fetchRoleInfo()
+  }, [])
+
+  const fetchRoleInfo = async () => {
+    const token = localStorage.getItem('auth_token')
+    if (!token) return
+    
+    try {
+      const res = await fetch('/api/admin/role', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+      if (res.ok) {
+        const data = await res.json()
+        setRoleInfo(data)
+      }
+    } catch {}
+  }
 
   const handleLogout = () => {
     localStorage.removeItem('auth_token')
@@ -55,6 +81,17 @@ export default function AdminSidebar() {
             <p className="text-xs text-muted-foreground">ENT Solutions</p>
           </div>
         </div>
+        {roleInfo && (
+          <div className="mt-3">
+            <Badge variant={roleInfo.isSuperAdmin ? 'destructive' : 'secondary'} className="w-full justify-center">
+              {roleInfo.isSuperAdmin ? (
+                <><Crown className="w-3 h-3 mr-1" /> Super Admin</>
+              ) : (
+                <><Shield className="w-3 h-3 mr-1" /> Moderator</>
+              )}
+            </Badge>
+          </div>
+        )}
       </div>
       
       <Separator />

@@ -794,11 +794,12 @@ async function handleRoute(request, { params }) {
     if (route === '/admin/verify' && method === 'GET') {
       if (!user) return errorResponse('Unauthorized', 401)
       
-      if (!isAdminEmail(user.email)) {
+      if (!isAnyAdmin(user)) {
         return errorResponse('Forbidden: Admin access required', 403)
       }
       
-      return jsonResponse({ isAdmin: true })
+      const role = getAdminRole(user)
+      return jsonResponse({ isAdmin: true, role, isSuperAdmin: isSuperAdmin(user.email) })
     }
 
     // Admin stats

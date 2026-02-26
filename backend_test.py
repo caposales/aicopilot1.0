@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Backend API Testing for SimpleTalk AI MVP
-Tests all backend APIs according to the test plan
+Backend API Testing for ENT Solutions Voice AI Agent Platform
+Tests all backend APIs including admin functionality
 """
 
 import requests
@@ -11,7 +11,7 @@ import sys
 from datetime import datetime
 
 # Get base URL from environment or use default
-BASE_URL = os.environ.get('NEXT_PUBLIC_BASE_URL', 'https://agent-setup-hub.preview.emergentagent.com')
+BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://restricted-panel.preview.emergentagent.com')
 API_URL = f"{BASE_URL}/api"
 
 class Colors:

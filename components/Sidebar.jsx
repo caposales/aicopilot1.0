@@ -51,6 +51,7 @@ export default function Sidebar() {
   const router = useRouter()
   const [agentsOpen, setAgentsOpen] = useState(true)
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [isAdmin, setIsAdmin] = useState(false)
   const [user, setUser] = useState(() => {
     if (typeof window !== 'undefined') {
       const stored = localStorage.getItem('user')
@@ -58,6 +59,24 @@ export default function Sidebar() {
     }
     return null
   })
+
+  useEffect(() => {
+    checkAdminStatus()
+  }, [])
+
+  const checkAdminStatus = async () => {
+    const token = localStorage.getItem('auth_token')
+    if (!token) return
+    
+    try {
+      const res = await fetch('/api/admin/verify', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+      setIsAdmin(res.ok)
+    } catch {
+      setIsAdmin(false)
+    }
+  }
 
   const handleLogout = () => {
     localStorage.removeItem('auth_token')

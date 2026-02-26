@@ -746,6 +746,182 @@ async function handleRoute(request, { params }) {
       })
     }
 
+    // ====== ADMIN ROUTES ======
+    
+    // Verify admin access
+    if (route === '/admin/verify' && method === 'GET') {
+      if (!user) return errorResponse('Unauthorized', 401)
+      
+      if (!isAdminEmail(user.email)) {
+        return errorResponse('Forbidden: Admin access required', 403)
+      }
+      
+      return jsonResponse({ isAdmin: true })
+    }
+
+    // Admin stats
+    if (route === '/admin/stats' && method === 'GET') {
+      if (!user) return errorResponse('Unauthorized', 401)
+      if (!isAdminEmail(user.email)) return errorResponse('Forbidden', 403)
+      
+      const [userCount, workspaceCount, agentCount, callCount, phoneCount, errorCount] = await Promise.all([
+        db.collection('users').countDocuments(),
+        db.collection('workspaces').countDocuments(),
+        db.collection('agents').countDocuments(),
+        db.collection('call_logs').countDocuments(),
+        db.collection('phone_numbers').countDocuments(),
+        db.collection('error_logs').countDocuments()
+      ])
+      
+      // Get recent users
+      const recentUsers = await db.collection('users')
+        .find({}, { projection: { _id: 0, password: 0 } })
+        .sort({ createdAt: -1 })
+        .limit(5)
+        .toArray()
+      
+      // Get recent calls
+      const recentCalls = await db.collection('call_logs')
+        .find({}, { projection: { _id: 0 } })
+        .sort({ createdAt: -1 })
+        .limit(5)
+        .toArray()
+      
+      return jsonResponse({
+        totalUsers: userCount,
+        totalWorkspaces: workspaceCount,
+        totalAgents: agentCount,
+        totalCalls: callCount,
+        totalPhoneNumbers: phoneCount,
+        totalErrors: errorCount,
+        recentUsers,
+        recentCalls
+      })
+    }
+
+    // Admin: List all users
+    if (route === '/admin/users' && method === 'GET') {
+      if (!user) return errorResponse('Unauthorized', 401)
+      if (!isAdminEmail(user.email)) return errorResponse('Forbidden', 403)
+      
+      const users = await db.collection('users')
+        .find({}, { projection: { _id: 0, password: 0 } })
+        .sort({ createdAt: -1 })
+        .toArray()
+      
+      // Mark admins
+      const usersWithAdminFlag = users.map(u => ({
+        ...u,
+        isAdmin: isAdminEmail(u.email)
+      }))
+      
+      return jsonResponse({ users: usersWithAdminFlag })
+    }
+
+    // Admin: Delete user
+    if (route.match(/^\/admin\/users\/[^/]+$/) && method === 'DELETE') {
+      if (!user) return errorResponse('Unauthorized', 401)
+      if (!isAdminEmail(user.email)) return errorResponse('Forbidden', 403)
+      
+      const userId = path[2]
+      
+      // Get user to check if admin
+      const targetUser = await db.collection('users').findOne({ id: userId })
+      if (!targetUser) return errorResponse('User not found', 404)
+      
+      // Prevent deleting admins
+      if (isAdminEmail(targetUser.email)) {
+        return errorResponse('Cannot delete admin users', 403)
+      }
+      
+      // Delete user and their workspace
+      await Promise.all([
+        db.collection('users').deleteOne({ id: userId }),
+        db.collection('workspaces').deleteOne({ id: targetUser.workspaceId }),
+        db.collection('agents').deleteMany({ workspaceId: targetUser.workspaceId }),
+        db.collection('integrations').deleteMany({ workspaceId: targetUser.workspaceId })
+      ])
+      
+      return jsonResponse({ success: true })
+    }
+
+    // Admin: List all agents
+    if (route === '/admin/agents' && method === 'GET') {
+      if (!user) return errorResponse('Unauthorized', 401)
+      if (!isAdminEmail(user.email)) return errorResponse('Forbidden', 403)
+      
+      const agents = await db.collection('agents')
+        .find({}, { projection: { _id: 0 } })
+        .sort({ createdAt: -1 })
+        .toArray()
+      
+      return jsonResponse({ agents })
+    }
+
+    // Admin: Delete agent
+    if (route.match(/^\/admin\/agents\/[^/]+$/) && method === 'DELETE') {
+      if (!user) return errorResponse('Unauthorized', 401)
+      if (!isAdminEmail(user.email)) return errorResponse('Forbidden', 403)
+      
+      const agentId = path[2]
+      const result = await db.collection('agents').deleteOne({ id: agentId })
+      
+      if (result.deletedCount === 0) return errorResponse('Agent not found', 404)
+      return jsonResponse({ success: true })
+    }
+
+    // Admin: List all call logs
+    if (route === '/admin/call-logs' && method === 'GET') {
+      if (!user) return errorResponse('Unauthorized', 401)
+      if (!isAdminEmail(user.email)) return errorResponse('Forbidden', 403)
+      
+      const callLogs = await db.collection('call_logs')
+        .find({}, { projection: { _id: 0 } })
+        .sort({ createdAt: -1 })
+        .limit(500)
+        .toArray()
+      
+      return jsonResponse({ callLogs })
+    }
+
+    // Admin: Delete call log
+    if (route.match(/^\/admin\/call-logs\/[^/]+$/) && method === 'DELETE') {
+      if (!user) return errorResponse('Unauthorized', 401)
+      if (!isAdminEmail(user.email)) return errorResponse('Forbidden', 403)
+      
+      const logId = path[2]
+      const result = await db.collection('call_logs').deleteOne({ id: logId })
+      
+      if (result.deletedCount === 0) return errorResponse('Call log not found', 404)
+      return jsonResponse({ success: true })
+    }
+
+    // Admin: List all error logs
+    if (route === '/admin/error-logs' && method === 'GET') {
+      if (!user) return errorResponse('Unauthorized', 401)
+      if (!isAdminEmail(user.email)) return errorResponse('Forbidden', 403)
+      
+      const errorLogs = await db.collection('error_logs')
+        .find({}, { projection: { _id: 0 } })
+        .sort({ createdAt: -1 })
+        .limit(500)
+        .toArray()
+      
+      return jsonResponse({ errorLogs })
+    }
+
+    // Admin: Delete error log
+    if (route.match(/^\/admin\/error-logs\/[^/]+$/) && method === 'DELETE') {
+      if (!user) return errorResponse('Unauthorized', 401)
+      if (!isAdminEmail(user.email)) return errorResponse('Forbidden', 403)
+      
+      const logId = path[2]
+      const result = await db.collection('error_logs').deleteOne({ id: logId })
+      
+      if (result.deletedCount === 0) return errorResponse('Error log not found', 404)
+      return jsonResponse({ success: true })
+    }
+
     // Route not found
     return errorResponse(`Route ${route} not found`, 404)
 

@@ -686,15 +686,49 @@ export default function AgentEditor({ agentType = 'inbound', title, description 
               </div>
               
               {formData.callTransferEnabled && (
-                <div className="space-y-2">
-                  <Label>Transfer Number</Label>
-                  <Input
-                    type="tel"
-                    value={formData.callTransferNumber}
-                    onChange={(e) => setFormData({ ...formData, callTransferNumber: e.target.value })}
-                    placeholder="+1 (555) 123-4567"
-                  />
-                </div>
+                <>
+                  <Separator />
+                  <div className="space-y-2">
+                    <Label>Transfer Number</Label>
+                    <Input
+                      type="tel"
+                      value={formData.callTransferNumber}
+                      onChange={(e) => setFormData({ ...formData, callTransferNumber: e.target.value })}
+                      placeholder="+1 (555) 123-4567"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Transfer Conditions</Label>
+                    <Select
+                      value={formData.callTransferConditions}
+                      onValueChange={(value) => setFormData({ ...formData, callTransferConditions: value })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="on_request">On Customer Request</SelectItem>
+                        <SelectItem value="on_escalation">On Escalation Keywords</SelectItem>
+                        <SelectItem value="always_offer">Always Offer Transfer</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      When should the agent offer to transfer the call?
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Transfer Message</Label>
+                    <Textarea
+                      value={formData.callTransferMessage}
+                      onChange={(e) => setFormData({ ...formData, callTransferMessage: e.target.value })}
+                      placeholder="I'll transfer you to a specialist now."
+                      rows={2}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      What the agent says before transferring
+                    </p>
+                  </div>
+                </>
               )}
             </CardContent>
           </Card>
@@ -707,21 +741,60 @@ export default function AgentEditor({ agentType = 'inbound', title, description 
                 Calendar Booking
               </CardTitle>
             </CardHeader>
-            <CardContent>
+            <CardContent className="space-y-4">
               <div className="flex items-center justify-between">
                 <div>
                   <Label>Enable Booking</Label>
-                  <p className="text-xs text-muted-foreground">Integrate with Cal.com</p>
+                  <p className="text-xs text-muted-foreground">Allow agent to book appointments</p>
                 </div>
                 <Switch
                   checked={formData.calendarBookingEnabled}
                   onCheckedChange={(checked) => setFormData({ ...formData, calendarBookingEnabled: checked })}
                 />
               </div>
+              
               {formData.calendarBookingEnabled && (
-                <p className="text-xs text-amber-600 mt-3">
-                  Requires Cal.com integration in Settings
-                </p>
+                <>
+                  <Separator />
+                  <div className="space-y-2">
+                    <Label>Calendar Provider</Label>
+                    <Select
+                      value={formData.calendarProvider}
+                      onValueChange={(value) => setFormData({ ...formData, calendarProvider: value })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="calcom">Cal.com</SelectItem>
+                        <SelectItem value="ghl">GoHighLevel</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Event Type ID</Label>
+                    <Input
+                      value={formData.calendarEventType}
+                      onChange={(e) => setFormData({ ...formData, calendarEventType: e.target.value })}
+                      placeholder="e.g., 30min-consultation"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      The event type or calendar ID to book appointments
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Confirmation Message</Label>
+                    <Textarea
+                      value={formData.bookingConfirmationMessage}
+                      onChange={(e) => setFormData({ ...formData, bookingConfirmationMessage: e.target.value })}
+                      placeholder="Your appointment has been booked!"
+                      rows={2}
+                    />
+                  </div>
+                  <p className="text-xs text-amber-600 mt-2">
+                    Requires {formData.calendarProvider === 'calcom' ? 'Cal.com' : 'GoHighLevel'} integration in Settings
+                  </p>
+                </>
               )}
             </CardContent>
           </Card>

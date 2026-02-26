@@ -162,6 +162,26 @@ export default function Sidebar() {
             )
           })}
         </nav>
+        
+        {/* Admin Link - Only visible for admin users */}
+        {isAdmin && (
+          <>
+            <Separator className="my-4" />
+            <Link href="/admin" onClick={() => setMobileOpen(false)}>
+              <Button
+                variant={pathname.startsWith('/admin') ? 'secondary' : 'ghost'}
+                className={cn(
+                  'w-full justify-start gap-3 font-normal',
+                  pathname.startsWith('/admin') && 'bg-red-50 text-red-700 hover:bg-red-100'
+                )}
+                data-testid="admin-panel-link"
+              >
+                <Shield className="w-5 h-5" />
+                Admin Panel
+              </Button>
+            </Link>
+          </>
+        )}
       </ScrollArea>
       
       <div className="p-4 border-t">

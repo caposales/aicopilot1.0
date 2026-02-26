@@ -142,9 +142,17 @@ export default function AgentEditor({ agentType = 'inbound', title, description 
       interruptSensitivity: agent.interruptSensitivity || 'high',
       responseSpeed: agent.responseSpeed || 'auto',
       aiCreativity: agent.aiCreativity ?? 0.7,
+      // Call Transfer Settings
       callTransferEnabled: agent.callTransferEnabled || false,
       callTransferNumber: agent.callTransferNumber || '',
+      callTransferConditions: agent.callTransferConditions || 'on_request',
+      callTransferMessage: agent.callTransferMessage || "I'll transfer you to a specialist now.",
+      // Calendar Booking Settings
       calendarBookingEnabled: agent.calendarBookingEnabled || false,
+      calendarProvider: agent.calendarProvider || 'calcom',
+      calendarEventType: agent.calendarEventType || '',
+      bookingConfirmationMessage: agent.bookingConfirmationMessage || 'Your appointment has been booked!',
+      // Webhook Settings
       postCallWebhookEnabled: agent.postCallWebhookEnabled || false,
       postCallWebhookUrl: agent.postCallWebhookUrl || '',
       promptTemplateId: agent.promptTemplateId || '',

@@ -964,6 +964,387 @@ async function handleRoute(request, { params }) {
       return jsonResponse({ success: true })
     }
 
+    // ====== ADMIN ROLE & INVITE MANAGEMENT ======
+
+    // Admin: Get admin role info
+    if (route === '/admin/role' && method === 'GET') {
+      if (!user) return errorResponse('Unauthorized', 401)
+      if (!isAnyAdmin(user)) return errorResponse('Forbidden', 403)
+      
+      const role = getAdminRole(user)
+      const permissions = {}
+      const permissionKeys = ['canViewUsers', 'canDeleteUsers', 'canAssignRoles', 'canInviteAdmins', 
+                              'canViewAllContent', 'canDeleteContent', 'canViewAuditLogs', 
+                              'canManageSystemSettings', 'canViewClientDetails']
+      permissionKeys.forEach(key => {
+        permissions[key] = hasPermission(user, key)
+      })
+      
+      return jsonResponse({ role, permissions, isSuperAdmin: isSuperAdmin(user.email) })
+    }
+
+    // Admin: Send invite (mock - console log)
+    if (route === '/admin/invite' && method === 'POST') {
+      if (!user) return errorResponse('Unauthorized', 401)
+      if (!hasPermission(user, 'canInviteAdmins')) return errorResponse('Forbidden: Super admin required', 403)
+      
+      const body = await request.json()
+      const { email, role, name } = body
+      
+      if (!email || !role) {
+        return errorResponse('Email and role are required')
+      }
+      
+      if (!['moderator', 'super_admin'].includes(role)) {
+        return errorResponse('Invalid role. Must be moderator or super_admin')
+      }
+      
+      // Check if user already exists
+      const existingUser = await db.collection('users').findOne({ email: email.toLowerCase() })
+      if (existingUser) {
+        // Update their admin role
+        await db.collection('users').updateOne(
+          { id: existingUser.id },
+          { $set: { adminRole: role, updatedAt: new Date() } }
+        )
+        
+        await logAuditEvent(db, {
+          action: AUDIT_ACTIONS.ADMIN_ROLE_CHANGED,
+          userId: user.id,
+          userEmail: user.email,
+          targetId: existingUser.id,
+          targetType: 'user',
+          details: { targetEmail: email, newRole: role }
+        })
+        
+        return jsonResponse({ success: true, message: 'User role updated', existed: true })
+      }
+      
+      // Create invite token
+      const inviteToken = uuidv4()
+      const invite = {
+        id: uuidv4(),
+        email: email.toLowerCase(),
+        name: name || '',
+        role,
+        token: inviteToken,
+        invitedBy: user.id,
+        invitedByEmail: user.email,
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
+        used: false,
+        createdAt: new Date()
+      }
+      
+      await db.collection('admin_invites').insertOne(invite)
+      
+      // Mock email - log to console
+      const inviteLink = `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/?invite=${inviteToken}`
+      console.log('================================================')
+      console.log('[MOCK EMAIL] Admin Invite')
+      console.log(`To: ${email}`)
+      console.log(`Role: ${role}`)
+      console.log(`Invite Link: ${inviteLink}`)
+      console.log(`Expires: ${invite.expiresAt.toISOString()}`)
+      console.log('================================================')
+      
+      await logAuditEvent(db, {
+        action: AUDIT_ACTIONS.ADMIN_INVITE_SENT,
+        userId: user.id,
+        userEmail: user.email,
+        details: { inviteEmail: email, role }
+      })
+      
+      return jsonResponse({ success: true, inviteLink, message: 'Invite sent (check console)' })
+    }
+
+    // Admin: List invites
+    if (route === '/admin/invites' && method === 'GET') {
+      if (!user) return errorResponse('Unauthorized', 401)
+      if (!hasPermission(user, 'canInviteAdmins')) return errorResponse('Forbidden', 403)
+      
+      const invites = await db.collection('admin_invites')
+        .find({}, { projection: { _id: 0 } })
+        .sort({ createdAt: -1 })
+        .limit(50)
+        .toArray()
+      
+      return jsonResponse({ invites })
+    }
+
+    // Admin: Change user role
+    if (route.match(/^\/admin\/users\/[^/]+\/role$/) && method === 'PUT') {
+      if (!user) return errorResponse('Unauthorized', 401)
+      if (!hasPermission(user, 'canAssignRoles')) return errorResponse('Forbidden: Super admin required', 403)
+      
+      const userId = path[2]
+      const body = await request.json()
+      const { adminRole } = body
+      
+      if (!['moderator', 'user', null].includes(adminRole)) {
+        return errorResponse('Invalid role')
+      }
+      
+      const targetUser = await db.collection('users').findOne({ id: userId })
+      if (!targetUser) return errorResponse('User not found', 404)
+      
+      // Can't change super admin's role (they're defined by email)
+      if (isSuperAdmin(targetUser.email)) {
+        return errorResponse('Cannot change role of super admin', 403)
+      }
+      
+      await db.collection('users').updateOne(
+        { id: userId },
+        { $set: { adminRole: adminRole, updatedAt: new Date() } }
+      )
+      
+      await logAuditEvent(db, {
+        action: AUDIT_ACTIONS.ADMIN_ROLE_CHANGED,
+        userId: user.id,
+        userEmail: user.email,
+        targetId: userId,
+        targetType: 'user',
+        details: { targetEmail: targetUser.email, newRole: adminRole || 'user' }
+      })
+      
+      return jsonResponse({ success: true })
+    }
+
+    // ====== AUDIT LOGS ======
+
+    // Admin: Get audit logs
+    if (route === '/admin/audit-logs' && method === 'GET') {
+      if (!user) return errorResponse('Unauthorized', 401)
+      if (!hasPermission(user, 'canViewAuditLogs')) return errorResponse('Forbidden', 403)
+      
+      const url = new URL(request.url)
+      const filters = {
+        userId: url.searchParams.get('userId'),
+        workspaceId: url.searchParams.get('workspaceId'),
+        action: url.searchParams.get('action'),
+        startDate: url.searchParams.get('startDate'),
+        endDate: url.searchParams.get('endDate')
+      }
+      
+      const limit = parseInt(url.searchParams.get('limit')) || 100
+      const logs = await getAuditLogs(db, filters, limit)
+      
+      return jsonResponse({ auditLogs: logs })
+    }
+
+    // ====== CLIENT MANAGEMENT (for admin) ======
+
+    // Admin: Get all clients with details
+    if (route === '/admin/clients' && method === 'GET') {
+      if (!user) return errorResponse('Unauthorized', 401)
+      if (!hasPermission(user, 'canViewClientDetails')) return errorResponse('Forbidden', 403)
+      
+      // Get all workspaces with their owners
+      const workspaces = await db.collection('workspaces')
+        .find({}, { projection: { _id: 0 } })
+        .sort({ createdAt: -1 })
+        .toArray()
+      
+      // Get owner info for each workspace
+      const clientsWithDetails = await Promise.all(workspaces.map(async (ws) => {
+        const owner = await db.collection('users').findOne(
+          { workspaceId: ws.id, role: 'owner' },
+          { projection: { _id: 0, password: 0 } }
+        )
+        const agentCount = await db.collection('agents').countDocuments({ workspaceId: ws.id })
+        const contactCount = await db.collection('contacts').countDocuments({ workspaceId: ws.id })
+        const integrations = await db.collection('integrations').findOne({ workspaceId: ws.id })
+        
+        return {
+          ...ws,
+          owner: owner || null,
+          stats: {
+            agents: agentCount,
+            contacts: contactCount,
+            hasIntegrations: {
+              twilio: integrations?.twilio?.configured || false,
+              ghl: integrations?.ghl?.configured || false,
+              calcom: integrations?.calcom?.configured || false
+            }
+          }
+        }
+      }))
+      
+      return jsonResponse({ clients: clientsWithDetails })
+    }
+
+    // Admin: Get single client details
+    if (route.match(/^\/admin\/clients\/[^/]+$/) && method === 'GET') {
+      if (!user) return errorResponse('Unauthorized', 401)
+      if (!hasPermission(user, 'canViewClientDetails')) return errorResponse('Forbidden', 403)
+      
+      const workspaceId = path[2]
+      
+      const workspace = await db.collection('workspaces').findOne({ id: workspaceId })
+      if (!workspace) return errorResponse('Client not found', 404)
+      
+      const [owner, agents, contacts, integrations, callLogs] = await Promise.all([
+        db.collection('users').findOne({ workspaceId, role: 'owner' }, { projection: { _id: 0, password: 0 } }),
+        db.collection('agents').find({ workspaceId }, { projection: { _id: 0 } }).toArray(),
+        db.collection('contacts').find({ workspaceId }, { projection: { _id: 0 } }).limit(100).toArray(),
+        db.collection('integrations').findOne({ workspaceId }, { projection: { _id: 0 } }),
+        db.collection('call_logs').find({ workspaceId }, { projection: { _id: 0 } }).sort({ createdAt: -1 }).limit(50).toArray()
+      ])
+      
+      // Mask integration secrets
+      const maskedIntegrations = integrations ? {
+        twilio: { configured: integrations.twilio?.configured || false },
+        ghl: { configured: integrations.ghl?.configured || false },
+        calcom: { configured: integrations.calcom?.configured || false },
+        deepgram: { configured: integrations.deepgram?.configured || false },
+        elevenlabs: { configured: integrations.elevenlabs?.configured || false }
+      } : null
+      
+      return jsonResponse({
+        workspace: { ...workspace, _id: undefined },
+        owner,
+        agents,
+        contacts,
+        integrations: maskedIntegrations,
+        recentCalls: callLogs
+      })
+    }
+
+    // ====== CONTACTS ======
+
+    // Create contact
+    if (route === '/contacts' && method === 'POST') {
+      if (!user) return errorResponse('Unauthorized', 401)
+      
+      const body = await request.json()
+      const contactId = uuidv4()
+      
+      const contact = {
+        id: contactId,
+        workspaceId: user.workspaceId,
+        firstName: body.firstName || '',
+        lastName: body.lastName || '',
+        email: body.email || '',
+        phone: body.phone || '',
+        company: body.company || '',
+        tags: body.tags || [],
+        notes: body.notes || '',
+        customFields: body.customFields || {},
+        createdAt: new Date(),
+        updatedAt: new Date()
+      }
+      
+      await db.collection('contacts').insertOne(contact)
+      
+      await logAuditEvent(db, {
+        action: AUDIT_ACTIONS.CONTACT_CREATED,
+        userId: user.id,
+        userEmail: user.email,
+        workspaceId: user.workspaceId,
+        targetId: contactId,
+        targetType: 'contact',
+        details: { contactName: `${contact.firstName} ${contact.lastName}` }
+      })
+      
+      return jsonResponse(contact, 201)
+    }
+
+    // List contacts
+    if (route === '/contacts' && method === 'GET') {
+      if (!user) return errorResponse('Unauthorized', 401)
+      
+      const url = new URL(request.url)
+      const limit = parseInt(url.searchParams.get('limit')) || 100
+      const skip = parseInt(url.searchParams.get('skip')) || 0
+      const search = url.searchParams.get('search')
+      
+      const query = { workspaceId: user.workspaceId }
+      if (search) {
+        query.$or = [
+          { firstName: { $regex: search, $options: 'i' } },
+          { lastName: { $regex: search, $options: 'i' } },
+          { email: { $regex: search, $options: 'i' } },
+          { phone: { $regex: search, $options: 'i' } },
+          { company: { $regex: search, $options: 'i' } }
+        ]
+      }
+      
+      const [contacts, total] = await Promise.all([
+        db.collection('contacts')
+          .find(query, { projection: { _id: 0 } })
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(limit)
+          .toArray(),
+        db.collection('contacts').countDocuments(query)
+      ])
+      
+      return jsonResponse({ contacts, total, limit, skip })
+    }
+
+    // Bulk import contacts
+    if (route === '/contacts/bulk' && method === 'POST') {
+      if (!user) return errorResponse('Unauthorized', 401)
+      
+      const body = await request.json()
+      const { contacts: contactsData } = body
+      
+      if (!Array.isArray(contactsData) || contactsData.length === 0) {
+        return errorResponse('Contacts array is required')
+      }
+      
+      if (contactsData.length > 1000) {
+        return errorResponse('Maximum 1000 contacts per import')
+      }
+      
+      const contacts = contactsData.map(c => ({
+        id: uuidv4(),
+        workspaceId: user.workspaceId,
+        firstName: c.firstName || c.first_name || '',
+        lastName: c.lastName || c.last_name || '',
+        email: c.email || '',
+        phone: c.phone || c.phoneNumber || c.phone_number || '',
+        company: c.company || c.companyName || c.company_name || '',
+        tags: c.tags || [],
+        notes: c.notes || '',
+        customFields: c.customFields || {},
+        createdAt: new Date(),
+        updatedAt: new Date()
+      }))
+      
+      await db.collection('contacts').insertMany(contacts)
+      
+      await logAuditEvent(db, {
+        action: AUDIT_ACTIONS.CONTACTS_IMPORTED,
+        userId: user.id,
+        userEmail: user.email,
+        workspaceId: user.workspaceId,
+        details: { count: contacts.length }
+      })
+      
+      return jsonResponse({ success: true, imported: contacts.length })
+    }
+
+    // Delete contact
+    if (route.match(/^\/contacts\/[^/]+$/) && method === 'DELETE') {
+      if (!user) return errorResponse('Unauthorized', 401)
+      
+      const contactId = path[1]
+      const result = await db.collection('contacts').deleteOne({ id: contactId, workspaceId: user.workspaceId })
+      
+      if (result.deletedCount === 0) return errorResponse('Contact not found', 404)
+      
+      await logAuditEvent(db, {
+        action: AUDIT_ACTIONS.CONTACT_DELETED,
+        userId: user.id,
+        userEmail: user.email,
+        workspaceId: user.workspaceId,
+        targetId: contactId,
+        targetType: 'contact'
+      })
+      
+      return jsonResponse({ success: true })
+    }
+
     // Route not found
     return errorResponse(`Route ${route} not found`, 404)
 

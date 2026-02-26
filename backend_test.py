@@ -846,9 +846,10 @@ class APITester:
     
     def run_all_tests(self):
         """Run all API tests in sequence"""
-        print(f"\n{Colors.BOLD}=== SimpleTalk AI Backend API Tests ==={Colors.ENDC}")
+        print(f"\n{Colors.BOLD}=== ENT Solutions Voice AI Agent Platform Backend API Tests ==={Colors.ENDC}")
         print(f"Testing API at: {API_URL}")
-        print(f"User: {self.test_user['email']}")
+        print(f"Admin User: {self.admin_user['email']}")
+        print(f"Regular User: {self.regular_user['email']}")
         print("-" * 50)
         
         # Health and public endpoints
@@ -856,18 +857,39 @@ class APITester:
         self.test_voices_api()
         self.test_prompts_api()
         
-        # Auth flow
+        # Auth flow - Admin and Regular Users
+        print(f"\n{Colors.BLUE}=== Admin Authentication Tests ==={Colors.ENDC}")
+        self.test_admin_login()
+        self.test_regular_user_login()
+        
+        # Admin access verification
+        print(f"\n{Colors.BLUE}=== Admin Access Control Tests ==={Colors.ENDC}")
+        self.test_admin_verify_endpoint()
+        self.test_regular_user_admin_access_denied()
+        
+        # Admin endpoints
+        print(f"\n{Colors.BLUE}=== Admin Management Tests ==={Colors.ENDC}")
+        self.test_admin_stats_endpoint()
+        self.test_admin_users_list()
+        self.test_admin_agents_list()
+        self.test_admin_call_logs_list()
+        self.test_admin_error_logs_list()
+        
+        # Regular user tests (using test user registration)
+        print(f"\n{Colors.BLUE}=== Regular User API Tests ==={Colors.ENDC}")
         self.test_user_registration()
         self.test_user_login()
         self.test_get_current_user()
         
-        # Agent CRUD
+        # Agent CRUD (using regular user token)
+        print(f"\n{Colors.BLUE}=== Agent Management Tests ==={Colors.ENDC}")
         self.test_create_agent()
         self.test_list_agents()
         self.test_get_agent()
         self.test_update_agent()
         
         # Integrations
+        print(f"\n{Colors.BLUE}=== Integration Tests ==={Colors.ENDC}")
         self.test_get_integrations()
         self.test_twilio_integration()
         self.test_deepgram_integration()
@@ -875,9 +897,11 @@ class APITester:
         self.test_remove_twilio_integration()
         
         # Dashboard
+        print(f"\n{Colors.BLUE}=== Dashboard Tests ==={Colors.ENDC}")
         self.test_dashboard_stats()
         
         # Cleanup
+        print(f"\n{Colors.BLUE}=== Cleanup Tests ==={Colors.ENDC}")
         self.test_delete_agent()
         
         # Summary

@@ -311,6 +311,220 @@ class APITester:
         except requests.exceptions.RequestException as e:
             self.log_result("Admin Error Logs List", "FAIL", f"Connection error: {str(e)}")
 
+    def test_admin_role_endpoint(self):
+        """Test GET /api/admin/role - Get admin role and permissions"""
+        if not self.admin_token:
+            self.log_result("Admin Role Endpoint", "FAIL", "No admin token available")
+            return
+            
+        try:
+            headers = {"Authorization": f"Bearer {self.admin_token}"}
+            response = requests.get(f"{API_URL}/admin/role", 
+                                  headers=headers, 
+                                  timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                required_fields = ["role", "permissions", "isSuperAdmin"]
+                missing_fields = [field for field in required_fields if field not in data]
+                
+                if not missing_fields:
+                    self.log_result("Admin Role Endpoint", "PASS", 
+                                  f"Role: {data['role']}, Super Admin: {data['isSuperAdmin']}")
+                else:
+                    self.log_result("Admin Role Endpoint", "FAIL", 
+                                  f"Missing fields: {missing_fields}")
+            else:
+                self.log_result("Admin Role Endpoint", "FAIL", 
+                              f"Status {response.status_code}: {response.text}")
+                
+        except requests.exceptions.RequestException as e:
+            self.log_result("Admin Role Endpoint", "FAIL", f"Connection error: {str(e)}")
+
+    def test_admin_invite_endpoint(self):
+        """Test POST /api/admin/invite - Send admin invite (mock)"""
+        if not self.admin_token:
+            self.log_result("Admin Invite Endpoint", "FAIL", "No admin token available")
+            return
+            
+        try:
+            invite_data = {
+                "email": "test.moderator@example.com",
+                "name": "Test Moderator",
+                "role": "moderator"
+            }
+            
+            headers = {"Authorization": f"Bearer {self.admin_token}"}
+            response = requests.post(f"{API_URL}/admin/invite", 
+                                   json=invite_data,
+                                   headers=headers, 
+                                   timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("success"):
+                    self.log_result("Admin Invite Endpoint", "PASS", 
+                                  f"Invite sent successfully (mock): {data.get('message', '')}")
+                else:
+                    self.log_result("Admin Invite Endpoint", "FAIL", 
+                                  "Invite response incorrect")
+            else:
+                self.log_result("Admin Invite Endpoint", "FAIL", 
+                              f"Status {response.status_code}: {response.text}")
+                
+        except requests.exceptions.RequestException as e:
+            self.log_result("Admin Invite Endpoint", "FAIL", f"Connection error: {str(e)}")
+
+    def test_admin_clients_list(self):
+        """Test GET /api/admin/clients - List all clients/workspaces"""
+        if not self.admin_token:
+            self.log_result("Admin Clients List", "FAIL", "No admin token available")
+            return
+            
+        try:
+            headers = {"Authorization": f"Bearer {self.admin_token}"}
+            response = requests.get(f"{API_URL}/admin/clients", 
+                                  headers=headers, 
+                                  timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if "clients" in data and isinstance(data["clients"], list):
+                    clients = data["clients"]
+                    self.log_result("Admin Clients List", "PASS", 
+                                  f"Retrieved {len(clients)} clients/workspaces")
+                else:
+                    self.log_result("Admin Clients List", "FAIL", 
+                                  "Invalid response format - missing clients array")
+            else:
+                self.log_result("Admin Clients List", "FAIL", 
+                              f"Status {response.status_code}: {response.text}")
+                
+        except requests.exceptions.RequestException as e:
+            self.log_result("Admin Clients List", "FAIL", f"Connection error: {str(e)}")
+
+    def test_admin_audit_logs(self):
+        """Test GET /api/admin/audit-logs - Get audit logs"""
+        if not self.admin_token:
+            self.log_result("Admin Audit Logs", "FAIL", "No admin token available")
+            return
+            
+        try:
+            headers = {"Authorization": f"Bearer {self.admin_token}"}
+            response = requests.get(f"{API_URL}/admin/audit-logs?limit=50", 
+                                  headers=headers, 
+                                  timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if "auditLogs" in data and isinstance(data["auditLogs"], list):
+                    audit_logs = data["auditLogs"]
+                    self.log_result("Admin Audit Logs", "PASS", 
+                                  f"Retrieved {len(audit_logs)} audit logs")
+                else:
+                    self.log_result("Admin Audit Logs", "FAIL", 
+                                  "Invalid response format - missing auditLogs array")
+            else:
+                self.log_result("Admin Audit Logs", "FAIL", 
+                              f"Status {response.status_code}: {response.text}")
+                
+        except requests.exceptions.RequestException as e:
+            self.log_result("Admin Audit Logs", "FAIL", f"Connection error: {str(e)}")
+
+    def test_contacts_api(self):
+        """Test contacts CRUD operations"""
+        if not self.auth_token:
+            self.log_result("Contacts API", "FAIL", "No auth token available")
+            return
+            
+        try:
+            # Test create contact
+            contact_data = {
+                "firstName": "John",
+                "lastName": "Doe",
+                "email": "john.doe@example.com",
+                "phone": "+1234567890",
+                "company": "Test Corp"
+            }
+            
+            headers = {"Authorization": f"Bearer {self.auth_token}"}
+            response = requests.post(f"{API_URL}/contacts", 
+                                   json=contact_data,
+                                   headers=headers, 
+                                   timeout=10)
+            
+            if response.status_code == 201:
+                contact = response.json()
+                contact_id = contact.get("id")
+                
+                # Test list contacts
+                list_response = requests.get(f"{API_URL}/contacts", 
+                                           headers=headers, 
+                                           timeout=10)
+                
+                if list_response.status_code == 200:
+                    list_data = list_response.json()
+                    if "contacts" in list_data:
+                        self.log_result("Contacts API", "PASS", 
+                                      f"Contact created and listed successfully. Total: {list_data.get('total', 0)}")
+                    else:
+                        self.log_result("Contacts API", "FAIL", 
+                                      "Contact created but list failed")
+                else:
+                    self.log_result("Contacts API", "FAIL", 
+                                  f"Contact created but list failed: {list_response.status_code}")
+            else:
+                self.log_result("Contacts API", "FAIL", 
+                              f"Contact creation failed: {response.status_code}: {response.text}")
+                
+        except requests.exceptions.RequestException as e:
+            self.log_result("Contacts API", "FAIL", f"Connection error: {str(e)}")
+
+    def test_bulk_contacts_import(self):
+        """Test bulk contacts import"""
+        if not self.auth_token:
+            self.log_result("Bulk Contacts Import", "FAIL", "No auth token available")
+            return
+            
+        try:
+            bulk_contacts = [
+                {
+                    "firstName": "Alice",
+                    "lastName": "Smith",
+                    "email": "alice@example.com",
+                    "phone": "+1111111111",
+                    "company": "Alpha Corp"
+                },
+                {
+                    "firstName": "Bob",
+                    "lastName": "Johnson",
+                    "email": "bob@example.com",
+                    "phone": "+2222222222",
+                    "company": "Beta Inc"
+                }
+            ]
+            
+            headers = {"Authorization": f"Bearer {self.auth_token}"}
+            response = requests.post(f"{API_URL}/contacts/bulk", 
+                                   json={"contacts": bulk_contacts},
+                                   headers=headers, 
+                                   timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("success") and data.get("imported") == 2:
+                    self.log_result("Bulk Contacts Import", "PASS", 
+                                  f"Successfully imported {data['imported']} contacts")
+                else:
+                    self.log_result("Bulk Contacts Import", "FAIL", 
+                                  "Bulk import response incorrect")
+            else:
+                self.log_result("Bulk Contacts Import", "FAIL", 
+                              f"Status {response.status_code}: {response.text}")
+                
+        except requests.exceptions.RequestException as e:
+            self.log_result("Bulk Contacts Import", "FAIL", f"Connection error: {str(e)}")
+
     def test_health_check(self):
         """Test GET /api/ - Health check endpoint"""
         try:

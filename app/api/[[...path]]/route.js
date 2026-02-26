@@ -902,32 +902,54 @@ async function handleRoute(request, { params }) {
     // Admin: List all agents
     if (route === '/admin/agents' && method === 'GET') {
       if (!user) return errorResponse('Unauthorized', 401)
-      if (!isAdminEmail(user.email)) return errorResponse('Forbidden', 403)
+      if (!isAnyAdmin(user)) return errorResponse('Forbidden', 403)
       
       const agents = await db.collection('agents')
         .find({}, { projection: { _id: 0 } })
         .sort({ createdAt: -1 })
         .toArray()
       
-      return jsonResponse({ agents })
+      // Add workspace/owner info
+      const agentsWithOwner = await Promise.all(agents.map(async (agent) => {
+        const workspace = await db.collection('workspaces').findOne({ id: agent.workspaceId })
+        const owner = await db.collection('users').findOne({ workspaceId: agent.workspaceId, role: 'owner' })
+        return {
+          ...agent,
+          workspaceName: workspace?.name || 'Unknown',
+          ownerEmail: owner?.email || 'Unknown'
+        }
+      }))
+      
+      return jsonResponse({ agents: agentsWithOwner })
     }
 
     // Admin: Delete agent
     if (route.match(/^\/admin\/agents\/[^/]+$/) && method === 'DELETE') {
       if (!user) return errorResponse('Unauthorized', 401)
-      if (!isAdminEmail(user.email)) return errorResponse('Forbidden', 403)
+      if (!hasPermission(user, 'canDeleteContent')) return errorResponse('Forbidden: Super admin required', 403)
       
       const agentId = path[2]
-      const result = await db.collection('agents').deleteOne({ id: agentId })
+      const agent = await db.collection('agents').findOne({ id: agentId })
+      if (!agent) return errorResponse('Agent not found', 404)
       
-      if (result.deletedCount === 0) return errorResponse('Agent not found', 404)
+      await db.collection('agents').deleteOne({ id: agentId })
+      
+      await logAuditEvent(db, {
+        action: AUDIT_ACTIONS.AGENT_DELETED,
+        userId: user.id,
+        userEmail: user.email,
+        targetId: agentId,
+        targetType: 'agent',
+        details: { agentName: agent.name, workspaceId: agent.workspaceId }
+      })
+      
       return jsonResponse({ success: true })
     }
 
     // Admin: List all call logs
     if (route === '/admin/call-logs' && method === 'GET') {
       if (!user) return errorResponse('Unauthorized', 401)
-      if (!isAdminEmail(user.email)) return errorResponse('Forbidden', 403)
+      if (!isAnyAdmin(user)) return errorResponse('Forbidden', 403)
       
       const callLogs = await db.collection('call_logs')
         .find({}, { projection: { _id: 0 } })
@@ -941,7 +963,7 @@ async function handleRoute(request, { params }) {
     // Admin: Delete call log
     if (route.match(/^\/admin\/call-logs\/[^/]+$/) && method === 'DELETE') {
       if (!user) return errorResponse('Unauthorized', 401)
-      if (!isAdminEmail(user.email)) return errorResponse('Forbidden', 403)
+      if (!hasPermission(user, 'canDeleteContent')) return errorResponse('Forbidden: Super admin required', 403)
       
       const logId = path[2]
       const result = await db.collection('call_logs').deleteOne({ id: logId })
@@ -953,7 +975,7 @@ async function handleRoute(request, { params }) {
     // Admin: List all error logs
     if (route === '/admin/error-logs' && method === 'GET') {
       if (!user) return errorResponse('Unauthorized', 401)
-      if (!isAdminEmail(user.email)) return errorResponse('Forbidden', 403)
+      if (!isAnyAdmin(user)) return errorResponse('Forbidden', 403)
       
       const errorLogs = await db.collection('error_logs')
         .find({}, { projection: { _id: 0 } })
@@ -967,7 +989,7 @@ async function handleRoute(request, { params }) {
     // Admin: Delete error log
     if (route.match(/^\/admin\/error-logs\/[^/]+$/) && method === 'DELETE') {
       if (!user) return errorResponse('Unauthorized', 401)
-      if (!isAdminEmail(user.email)) return errorResponse('Forbidden', 403)
+      if (!hasPermission(user, 'canDeleteContent')) return errorResponse('Forbidden: Super admin required', 403)
       
       const logId = path[2]
       const result = await db.collection('error_logs').deleteOne({ id: logId })

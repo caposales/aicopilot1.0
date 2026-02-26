@@ -66,6 +66,251 @@ class APITester:
         if details:
             print(f"  {details}")
         
+    def test_admin_login(self):
+        """Test admin login with admin@example.com"""
+        try:
+            response = requests.post(f"{API_URL}/auth/login", 
+                                   json=self.admin_user, 
+                                   timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                required_fields = ["token", "user", "workspace"]
+                missing_fields = [field for field in required_fields if field not in data]
+                
+                if not missing_fields:
+                    self.admin_token = data["token"]
+                    self.admin_data = data["user"]
+                    self.log_result("Admin Login", "PASS", 
+                                  f"Admin login successful: {data['user']['email']}")
+                else:
+                    self.log_result("Admin Login", "FAIL", 
+                                  f"Missing fields: {missing_fields}")
+            else:
+                self.log_result("Admin Login", "FAIL", 
+                              f"Status {response.status_code}: {response.text}")
+                
+        except requests.exceptions.RequestException as e:
+            self.log_result("Admin Login", "FAIL", f"Connection error: {str(e)}")
+
+    def test_regular_user_login(self):
+        """Test regular user login with user@test.com"""
+        try:
+            response = requests.post(f"{API_URL}/auth/login", 
+                                   json=self.regular_user, 
+                                   timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                required_fields = ["token", "user", "workspace"]
+                missing_fields = [field for field in required_fields if field not in data]
+                
+                if not missing_fields:
+                    self.auth_token = data["token"]  # Store regular user token
+                    self.user_data = data["user"]
+                    self.log_result("Regular User Login", "PASS", 
+                                  f"Regular user login successful: {data['user']['email']}")
+                else:
+                    self.log_result("Regular User Login", "FAIL", 
+                                  f"Missing fields: {missing_fields}")
+            else:
+                self.log_result("Regular User Login", "FAIL", 
+                              f"Status {response.status_code}: {response.text}")
+                
+        except requests.exceptions.RequestException as e:
+            self.log_result("Regular User Login", "FAIL", f"Connection error: {str(e)}")
+
+    def test_admin_verify_endpoint(self):
+        """Test GET /api/admin/verify - Admin access verification"""
+        if not self.admin_token:
+            self.log_result("Admin Verify Endpoint", "FAIL", "No admin token available")
+            return
+            
+        try:
+            headers = {"Authorization": f"Bearer {self.admin_token}"}
+            response = requests.get(f"{API_URL}/admin/verify", 
+                                  headers=headers, 
+                                  timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("isAdmin"):
+                    self.log_result("Admin Verify Endpoint", "PASS", 
+                                  "Admin verification successful")
+                else:
+                    self.log_result("Admin Verify Endpoint", "FAIL", 
+                                  "Admin flag not set correctly")
+            else:
+                self.log_result("Admin Verify Endpoint", "FAIL", 
+                              f"Status {response.status_code}: {response.text}")
+                
+        except requests.exceptions.RequestException as e:
+            self.log_result("Admin Verify Endpoint", "FAIL", f"Connection error: {str(e)}")
+
+    def test_regular_user_admin_access_denied(self):
+        """Test that regular user cannot access admin endpoints"""
+        if not self.auth_token:
+            self.log_result("Regular User Admin Access Denied", "FAIL", "No regular user token available")
+            return
+            
+        try:
+            headers = {"Authorization": f"Bearer {self.auth_token}"}
+            response = requests.get(f"{API_URL}/admin/verify", 
+                                  headers=headers, 
+                                  timeout=10)
+            
+            if response.status_code == 403:
+                self.log_result("Regular User Admin Access Denied", "PASS", 
+                              "Regular user correctly denied admin access")
+            else:
+                self.log_result("Regular User Admin Access Denied", "FAIL", 
+                              f"Expected 403, got {response.status_code}: {response.text}")
+                
+        except requests.exceptions.RequestException as e:
+            self.log_result("Regular User Admin Access Denied", "FAIL", f"Connection error: {str(e)}")
+
+    def test_admin_stats_endpoint(self):
+        """Test GET /api/admin/stats - Admin dashboard stats"""
+        if not self.admin_token:
+            self.log_result("Admin Stats Endpoint", "FAIL", "No admin token available")
+            return
+            
+        try:
+            headers = {"Authorization": f"Bearer {self.admin_token}"}
+            response = requests.get(f"{API_URL}/admin/stats", 
+                                  headers=headers, 
+                                  timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                required_fields = ["totalUsers", "totalWorkspaces", "totalAgents", "totalCalls", "totalPhoneNumbers", "totalErrors"]
+                missing_fields = [field for field in required_fields if field not in data]
+                
+                if not missing_fields:
+                    self.log_result("Admin Stats Endpoint", "PASS", 
+                                  f"Admin stats retrieved: {data['totalUsers']} users, {data['totalAgents']} agents")
+                else:
+                    self.log_result("Admin Stats Endpoint", "FAIL", 
+                                  f"Missing fields: {missing_fields}")
+            else:
+                self.log_result("Admin Stats Endpoint", "FAIL", 
+                              f"Status {response.status_code}: {response.text}")
+                
+        except requests.exceptions.RequestException as e:
+            self.log_result("Admin Stats Endpoint", "FAIL", f"Connection error: {str(e)}")
+
+    def test_admin_users_list(self):
+        """Test GET /api/admin/users - List all users"""
+        if not self.admin_token:
+            self.log_result("Admin Users List", "FAIL", "No admin token available")
+            return
+            
+        try:
+            headers = {"Authorization": f"Bearer {self.admin_token}"}
+            response = requests.get(f"{API_URL}/admin/users", 
+                                  headers=headers, 
+                                  timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if "users" in data and isinstance(data["users"], list):
+                    users = data["users"]
+                    self.log_result("Admin Users List", "PASS", 
+                                  f"Retrieved {len(users)} users")
+                else:
+                    self.log_result("Admin Users List", "FAIL", 
+                                  "Invalid response format - missing users array")
+            else:
+                self.log_result("Admin Users List", "FAIL", 
+                              f"Status {response.status_code}: {response.text}")
+                
+        except requests.exceptions.RequestException as e:
+            self.log_result("Admin Users List", "FAIL", f"Connection error: {str(e)}")
+
+    def test_admin_agents_list(self):
+        """Test GET /api/admin/agents - List all agents"""
+        if not self.admin_token:
+            self.log_result("Admin Agents List", "FAIL", "No admin token available")
+            return
+            
+        try:
+            headers = {"Authorization": f"Bearer {self.admin_token}"}
+            response = requests.get(f"{API_URL}/admin/agents", 
+                                  headers=headers, 
+                                  timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if "agents" in data and isinstance(data["agents"], list):
+                    agents = data["agents"]
+                    self.log_result("Admin Agents List", "PASS", 
+                                  f"Retrieved {len(agents)} agents")
+                else:
+                    self.log_result("Admin Agents List", "FAIL", 
+                                  "Invalid response format - missing agents array")
+            else:
+                self.log_result("Admin Agents List", "FAIL", 
+                              f"Status {response.status_code}: {response.text}")
+                
+        except requests.exceptions.RequestException as e:
+            self.log_result("Admin Agents List", "FAIL", f"Connection error: {str(e)}")
+
+    def test_admin_call_logs_list(self):
+        """Test GET /api/admin/call-logs - List all call logs"""
+        if not self.admin_token:
+            self.log_result("Admin Call Logs List", "FAIL", "No admin token available")
+            return
+            
+        try:
+            headers = {"Authorization": f"Bearer {self.admin_token}"}
+            response = requests.get(f"{API_URL}/admin/call-logs", 
+                                  headers=headers, 
+                                  timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if "callLogs" in data and isinstance(data["callLogs"], list):
+                    call_logs = data["callLogs"]
+                    self.log_result("Admin Call Logs List", "PASS", 
+                                  f"Retrieved {len(call_logs)} call logs")
+                else:
+                    self.log_result("Admin Call Logs List", "FAIL", 
+                                  "Invalid response format - missing callLogs array")
+            else:
+                self.log_result("Admin Call Logs List", "FAIL", 
+                              f"Status {response.status_code}: {response.text}")
+                
+        except requests.exceptions.RequestException as e:
+            self.log_result("Admin Call Logs List", "FAIL", f"Connection error: {str(e)}")
+
+    def test_admin_error_logs_list(self):
+        """Test GET /api/admin/error-logs - List all error logs"""
+        if not self.admin_token:
+            self.log_result("Admin Error Logs List", "FAIL", "No admin token available")
+            return
+            
+        try:
+            headers = {"Authorization": f"Bearer {self.admin_token}"}
+            response = requests.get(f"{API_URL}/admin/error-logs", 
+                                  headers=headers, 
+                                  timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if "errorLogs" in data and isinstance(data["errorLogs"], list):
+                    error_logs = data["errorLogs"]
+                    self.log_result("Admin Error Logs List", "PASS", 
+                                  f"Retrieved {len(error_logs)} error logs")
+                else:
+                    self.log_result("Admin Error Logs List", "FAIL", 
+                                  "Invalid response format - missing errorLogs array")
+            else:
+                self.log_result("Admin Error Logs List", "FAIL", 
+                              f"Status {response.status_code}: {response.text}")
+                
+        except requests.exceptions.RequestException as e:
+            self.log_result("Admin Error Logs List", "FAIL", f"Connection error: {str(e)}")
+
     def test_health_check(self):
         """Test GET /api/ - Health check endpoint"""
         try:

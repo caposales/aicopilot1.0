@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server'
 import { connectToMongo } from '@/lib/db'
 import { hashPassword, verifyPassword, generateToken, verifyToken, extractTokenFromHeader } from '@/lib/auth'
 import { encrypt, decrypt, maskSecret } from '@/lib/encryption'
+import { isAdminEmail } from '@/lib/admin'
 
 // Helper function to handle CORS
 function handleCORS(response) {

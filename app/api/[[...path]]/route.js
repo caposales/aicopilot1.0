@@ -3,7 +3,8 @@ import { NextResponse } from 'next/server'
 import { connectToMongo } from '@/lib/db'
 import { hashPassword, verifyPassword, generateToken, verifyToken, extractTokenFromHeader } from '@/lib/auth'
 import { encrypt, decrypt, maskSecret } from '@/lib/encryption'
-import { isAdminEmail } from '@/lib/admin'
+import { isAdminEmail, isSuperAdmin, getAdminRole, hasPermission, isAnyAdmin, ADMIN_ROLES } from '@/lib/admin'
+import { logAuditEvent, getAuditLogs, AUDIT_ACTIONS } from '@/lib/audit'
 
 // Helper function to handle CORS
 function handleCORS(response) {

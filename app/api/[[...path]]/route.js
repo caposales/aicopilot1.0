@@ -844,20 +844,21 @@ async function handleRoute(request, { params }) {
     // Admin: List all users
     if (route === '/admin/users' && method === 'GET') {
       if (!user) return errorResponse('Unauthorized', 401)
-      if (!isAdminEmail(user.email)) return errorResponse('Forbidden', 403)
+      if (!isAnyAdmin(user)) return errorResponse('Forbidden', 403)
       
       const users = await db.collection('users')
         .find({}, { projection: { _id: 0, password: 0 } })
         .sort({ createdAt: -1 })
         .toArray()
       
-      // Mark admins
-      const usersWithAdminFlag = users.map(u => ({
+      // Add admin role info to each user
+      const usersWithRoles = users.map(u => ({
         ...u,
-        isAdmin: isAdminEmail(u.email)
+        adminRole: getAdminRole(u),
+        isSuperAdmin: isSuperAdmin(u.email)
       }))
       
-      return jsonResponse({ users: usersWithAdminFlag })
+      return jsonResponse({ users: usersWithRoles })
     }
 
     // Admin: Delete user

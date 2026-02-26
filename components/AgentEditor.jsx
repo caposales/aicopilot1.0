@@ -59,9 +59,17 @@ const DEFAULT_FORM_DATA = {
   interruptSensitivity: 'high',
   responseSpeed: 'auto',
   aiCreativity: 0.7,
+  // Call Transfer Settings
   callTransferEnabled: false,
   callTransferNumber: '',
+  callTransferConditions: 'on_request',
+  callTransferMessage: "I'll transfer you to a specialist now.",
+  // Calendar Booking Settings
   calendarBookingEnabled: false,
+  calendarProvider: 'calcom',
+  calendarEventType: '',
+  bookingConfirmationMessage: 'Your appointment has been booked!',
+  // Webhook Settings
   postCallWebhookEnabled: false,
   postCallWebhookUrl: '',
   promptTemplateId: '',

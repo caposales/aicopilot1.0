@@ -26,9 +26,25 @@ class APITester:
     def __init__(self):
         self.results = []
         self.auth_token = None
+        self.admin_token = None
         self.user_data = None
+        self.admin_data = None
         self.workspace_data = None
         self.agent_id = None
+        
+        # Admin credentials from test requirements
+        self.admin_user = {
+            "email": "admin@example.com",
+            "password": "admin123"
+        }
+        
+        # Regular user credentials from test requirements  
+        self.regular_user = {
+            "email": "user@test.com",
+            "password": "user123"
+        }
+        
+        # Test user for registration
         self.test_user = {
             "email": "sarah.johnson@techcorp.com",
             "password": "SecurePass123!",

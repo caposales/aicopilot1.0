@@ -1118,6 +1118,11 @@ class APITester:
         print(f"\n{Colors.BLUE}=== Dashboard Tests ==={Colors.ENDC}")
         self.test_dashboard_stats()
         
+        # Contacts
+        print(f"\n{Colors.BLUE}=== Contacts Tests ==={Colors.ENDC}")
+        self.test_contacts_api()
+        self.test_bulk_contacts_import()
+        
         # Cleanup
         print(f"\n{Colors.BLUE}=== Cleanup Tests ==={Colors.ENDC}")
         self.test_delete_agent()

@@ -61,7 +61,29 @@ export default function Sidebar() {
   })
 
   useEffect(() => {
-    checkAdminStatus()
+    // Re-check admin status when user changes or on mount
+    const storedUser = localStorage.getItem('user')
+    if (storedUser) {
+      setUser(JSON.parse(storedUser))
+      checkAdminStatus()
+    }
+  }, [])
+
+  // Also listen for storage changes (login/logout)
+  useEffect(() => {
+    const handleStorageChange = () => {
+      const storedUser = localStorage.getItem('user')
+      if (storedUser) {
+        setUser(JSON.parse(storedUser))
+        checkAdminStatus()
+      } else {
+        setUser(null)
+        setIsAdmin(false)
+      }
+    }
+    
+    window.addEventListener('storage', handleStorageChange)
+    return () => window.removeEventListener('storage', handleStorageChange)
   }, [])
 
   const checkAdminStatus = async () => {

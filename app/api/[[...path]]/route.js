@@ -865,7 +865,7 @@ async function handleRoute(request, { params }) {
     // Admin: Delete user
     if (route.match(/^\/admin\/users\/[^/]+$/) && method === 'DELETE') {
       if (!user) return errorResponse('Unauthorized', 401)
-      if (!isAdminEmail(user.email)) return errorResponse('Forbidden', 403)
+      if (!hasPermission(user, 'canDeleteUsers')) return errorResponse('Forbidden: Super admin required', 403)
       
       const userId = path[2]
       
@@ -873,9 +873,9 @@ async function handleRoute(request, { params }) {
       const targetUser = await db.collection('users').findOne({ id: userId })
       if (!targetUser) return errorResponse('User not found', 404)
       
-      // Prevent deleting admins
-      if (isAdminEmail(targetUser.email)) {
-        return errorResponse('Cannot delete admin users', 403)
+      // Prevent deleting super admins
+      if (isSuperAdmin(targetUser.email)) {
+        return errorResponse('Cannot delete super admin users', 403)
       }
       
       // Delete user and their workspace
@@ -883,8 +883,18 @@ async function handleRoute(request, { params }) {
         db.collection('users').deleteOne({ id: userId }),
         db.collection('workspaces').deleteOne({ id: targetUser.workspaceId }),
         db.collection('agents').deleteMany({ workspaceId: targetUser.workspaceId }),
-        db.collection('integrations').deleteMany({ workspaceId: targetUser.workspaceId })
+        db.collection('integrations').deleteMany({ workspaceId: targetUser.workspaceId }),
+        db.collection('contacts').deleteMany({ workspaceId: targetUser.workspaceId })
       ])
+      
+      await logAuditEvent(db, {
+        action: AUDIT_ACTIONS.USER_DELETED,
+        userId: user.id,
+        userEmail: user.email,
+        targetId: userId,
+        targetType: 'user',
+        details: { deletedEmail: targetUser.email }
+      })
       
       return jsonResponse({ success: true })
     }

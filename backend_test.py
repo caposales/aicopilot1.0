@@ -321,7 +321,7 @@ class APITester:
                 expected_fields = ["message", "version"]
                 missing_fields = [field for field in expected_fields if field not in data]
                 
-                if not missing_fields and data.get("message") == "SimpleTalk AI API":
+                if not missing_fields and data.get("message") == "ENT Solutions API":
                     self.log_result("Health Check", "PASS", f"API responding: {data}")
                 else:
                     self.log_result("Health Check", "FAIL", f"Unexpected response format: {data}")

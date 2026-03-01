@@ -97,12 +97,14 @@ export default function AgentEditor({ agentType = 'inbound', title, description 
       const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null
       const headers = token ? { 'Authorization': `Bearer ${token}` } : {}
 
-      const [voicesRes, promptsRes, agentsRes] = await Promise.all([
-        // ✅ IMPORTANT CHANGE: send auth headers so backend can use workspaceId and return YOUR ElevenLabs voices
-        fetch('/api/voices', { headers }),
-        fetch('/api/prompts'),
-        fetch('/api/agents', { headers })
-      ])
+      const token = localStorage.getItem('auth_token')
+const headers = token ? { Authorization: `Bearer ${token}` } : {}
+
+const [voicesRes, promptsRes, agentsRes] = await Promise.all([
+  fetch(`${window.location.origin}/api/voices`, { headers }),
+  fetch(`${window.location.origin}/api/prompts`),
+  fetch(`${window.location.origin}/api/agents`, { headers }),
+])
 
       const voicesData = await voicesRes.json()
       const promptsData = await promptsRes.json()

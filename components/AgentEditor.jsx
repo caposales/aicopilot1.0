@@ -13,11 +13,11 @@ import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { toast } from 'sonner'
-import { 
-  Save, 
-  Play, 
-  Phone, 
-  Calendar, 
+import {
+  Save,
+  Play,
+  Phone,
+  Calendar,
   Webhook,
   Sparkles,
   Volume2,
@@ -89,15 +89,17 @@ export default function AgentEditor({ agentType = 'inbound', title, description 
 
   useEffect(() => {
     fetchData()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentType])
 
   const fetchData = async () => {
     try {
-      const token = localStorage.getItem('auth_token')
-      const headers = { 'Authorization': `Bearer ${token}` }
+      const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null
+      const headers = token ? { 'Authorization': `Bearer ${token}` } : {}
 
       const [voicesRes, promptsRes, agentsRes] = await Promise.all([
-        fetch('/api/voices'),
+        // ✅ IMPORTANT CHANGE: send auth headers so backend can use workspaceId and return YOUR ElevenLabs voices
+        fetch('/api/voices', { headers }),
         fetch('/api/prompts'),
         fetch('/api/agents', { headers })
       ])
@@ -108,7 +110,7 @@ export default function AgentEditor({ agentType = 'inbound', title, description 
 
       setVoices(voicesData.voices || [])
       setPrompts(promptsData.prompts || [])
-      
+
       // Filter agents by type
       const filteredAgents = (agentsData.agents || []).filter(a => a.agentType === agentType)
       setAgents(filteredAgents)
@@ -122,10 +124,10 @@ export default function AgentEditor({ agentType = 'inbound', title, description 
 
   const handleCreateNew = () => {
     setSelectedAgent(null)
-    setFormData({ 
-      ...DEFAULT_FORM_DATA, 
+    setFormData({
+      ...DEFAULT_FORM_DATA,
       name: `New ${agentType === 'inbound' ? 'Inbound' : 'Outbound'} Agent`,
-      initialMessage: agentType === 'outbound' 
+      initialMessage: agentType === 'outbound'
         ? 'Hi! This is a call from ENT Solutions. Do you have a moment to talk?'
         : 'Hello! Thank you for calling. How can I help you today?'
     })
@@ -295,8 +297,8 @@ export default function AgentEditor({ agentType = 'inbound', title, description 
             {agents.map((agent) => {
               const voice = voices.find(v => v.id === agent.voiceId)
               return (
-                <Card 
-                  key={agent.id} 
+                <Card
+                  key={agent.id}
                   className="cursor-pointer hover:border-blue-300 transition-colors"
                   onClick={() => handleEditAgent(agent)}
                 >
@@ -446,7 +448,7 @@ export default function AgentEditor({ agentType = 'inbound', title, description 
                   rows={3}
                 />
                 <p className="text-xs text-muted-foreground">
-                  {agentType === 'outbound' 
+                  {agentType === 'outbound'
                     ? 'This is what the agent says when making a call'
                     : 'This is what the agent says when answering a call'}
                 </p>
@@ -489,11 +491,10 @@ export default function AgentEditor({ agentType = 'inbound', title, description 
                 {voices.map((voice) => (
                   <div
                     key={voice.id}
-                    className={`relative p-4 rounded-lg border-2 cursor-pointer transition-all hover:border-blue-300 ${
-                      formData.voiceId === voice.id
-                        ? 'border-blue-500 bg-blue-50'
-                        : 'border-border'
-                    }`}
+                    className={`relative p-4 rounded-lg border-2 cursor-pointer transition-all hover:border-blue-300 ${formData.voiceId === voice.id
+                      ? 'border-blue-500 bg-blue-50'
+                      : 'border-border'
+                      }`}
                     onClick={() => setFormData({ ...formData, voiceId: voice.id })}
                   >
                     <div className="flex flex-col items-center text-center">
@@ -514,7 +515,7 @@ export default function AgentEditor({ agentType = 'inbound', title, description 
                   </div>
                 ))}
               </div>
-              
+
               {selectedVoice && (
                 <div className="mt-4 p-4 bg-muted rounded-lg flex items-center justify-between">
                   <div className="flex items-center gap-3">
@@ -684,7 +685,7 @@ export default function AgentEditor({ agentType = 'inbound', title, description 
                   onCheckedChange={(checked) => setFormData({ ...formData, callTransferEnabled: checked })}
                 />
               </div>
-              
+
               {formData.callTransferEnabled && (
                 <>
                   <Separator />
@@ -752,7 +753,7 @@ export default function AgentEditor({ agentType = 'inbound', title, description 
                   onCheckedChange={(checked) => setFormData({ ...formData, calendarBookingEnabled: checked })}
                 />
               </div>
-              
+
               {formData.calendarBookingEnabled && (
                 <>
                   <Separator />
@@ -818,7 +819,7 @@ export default function AgentEditor({ agentType = 'inbound', title, description 
                   onCheckedChange={(checked) => setFormData({ ...formData, postCallWebhookEnabled: checked })}
                 />
               </div>
-              
+
               {formData.postCallWebhookEnabled && (
                 <div className="space-y-2">
                   <Label>Webhook URL</Label>

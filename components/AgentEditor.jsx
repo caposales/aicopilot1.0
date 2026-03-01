@@ -106,18 +106,46 @@ export default function AgentEditor({ agentType = 'inbound', title, description 
     }
   }
 
-  const fetchData = async () => {
-    console.log('MARKER_AGENTEDITOR_FETCHDATA_RUNNING_V2')
+   const fetchData = async () => {
+    console.log("MARKER_AGENTEDITOR_FETCHDATA_RUNNING_V3")
     setIsLoading(true)
+
     try {
-      const headers = getAuthHeaders()
+      // ✅ Always read token from localStorage and send Authorization header
+      const token =
+        typeof window !== "undefined" ? localStorage.getItem("auth_token") : null
+
+      const headers = token ? { Authorization: `Bearer ${token}` } : {}
 
       const [voicesRes, promptsRes, agentsRes, integrationsRes] = await Promise.all([
-        fetch('/api/voices', { headers }),
-        fetch('/api/prompts'),
-        fetch('/api/agents', { headers }),
-        fetch('/api/integrations', { headers }),
+        fetch("/api/voices", { headers }),
+        fetch("/api/prompts"),
+        fetch("/api/agents", { headers }),
+        fetch("/api/integrations", { headers }),
       ])
+
+      const voicesData = await voicesRes.json()
+      const promptsData = await promptsRes.json()
+      const agentsData = await agentsRes.json()
+      const integrationsData = await integrationsRes.json()
+
+      setVoices(voicesData.voices || [])
+      setPrompts(promptsData.prompts || [])
+
+      // ✅ If you have integrations state, keep this line; otherwise remove it
+      // setIntegrations?.(integrationsData)
+
+      const filteredAgents = (agentsData.agents || []).filter(
+        (a) => a.agentType === agentType
+      )
+      setAgents(filteredAgents)
+    } catch (error) {
+      console.error("Failed to fetch data:", error)
+      toast.error("Failed to load data")
+    } finally {
+      setIsLoading(false)
+    }
+  }
 
       const voicesData = await voicesRes.json()
       const promptsData = await promptsRes.json()

@@ -347,18 +347,77 @@ async function handleRoute(request, { params }) {
     }
 
     // Get voices list (public)
-    if (route === '/voices' && method === 'GET') {
+if (route === '/voices' && method === 'GET') {
+  // NOTE: UI calls /api/voices but route here is "/voices" inside the catch-all
   if (!user) return errorResponse('Unauthorized', 401)
 
-  const integrations = await db.collection('integrations')
-    .findOne({ workspaceId: user.workspaceId })
+  const integrations = await db.collection('integrations').findOne({ workspaceId: user.workspaceId })
 
- if (!integrations?.elevenlabs?.configured || !integrations?.elevenlabs?.apiKey) {
-  // fallback list so UI doesn't break
-  return jsonResponse({
-    source: 'fallback_not_configured',
-    voices: ELEVENLABS_VOICES
-  })
+  const configured = !!integrations?.elevenlabs?.configured
+  const hasApiKey = !!integrations?.elevenlabs?.apiKey
+
+  // If not configured, return fallback so UI still shows something
+  if (!configured || !hasApiKey) {
+    return jsonResponse({
+      source: 'fallback_not_configured',
+      debug: { configured, hasApiKey },
+      voices: ELEVENLABS_VOICES
+    })
+  }
+
+  let decryptedKey = null
+  try {
+    decryptedKey = decrypt(integrations.elevenlabs.apiKey)
+  } catch (e) {
+    return jsonResponse({
+      source: 'fallback_decrypt_failed',
+      debug: { configured, hasApiKey, decryptError: String(e?.message || e) },
+      voices: ELEVENLABS_VOICES
+    })
+  }
+
+  try {
+    const response = await fetch('https://api.elevenlabs.io/v1/voices', {
+      headers: {
+        'xi-api-key': decryptedKey,
+        'accept': 'application/json'
+      },
+      cache: 'no-store'
+    })
+
+    const text = await response.text()
+    if (!response.ok) {
+      return jsonResponse({
+        source: 'fallback_elevenlabs_http_error',
+        debug: {
+          configured,
+          hasApiKey,
+          status: response.status,
+          body: text?.slice(0, 300)
+        },
+        voices: ELEVENLABS_VOICES
+      }, 200)
+    }
+
+    const data = JSON.parse(text)
+
+    return jsonResponse({
+      source: 'elevenlabs',
+      debug: { configured, hasApiKey, count: data?.voices?.length || 0 },
+      voices: (data?.voices || []).map(v => ({
+        id: v.voice_id,
+        name: v.name,
+        description: v.labels?.accent || v.labels?.description || v.description || '',
+        avatar: ''
+      }))
+    })
+  } catch (e) {
+    return jsonResponse({
+      source: 'fallback_elevenlabs_exception',
+      debug: { configured, hasApiKey, error: String(e?.message || e) },
+      voices: ELEVENLABS_VOICES
+    })
+  }
 }
 
   const decryptedKey = decrypt(integrations.elevenlabs.apiKey)

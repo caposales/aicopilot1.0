@@ -92,7 +92,7 @@ export default function AgentEditor({ agentType = 'inbound', title, description 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentType])
 
-  const fetchData = async () => {
+  const fetchData = async () => {console.log("MARKER_AGENTEDITOR_FETCHDATA_RUNNING_V1")
     try {
       const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null
       const headers = token ? { 'Authorization': `Bearer ${token}` } : {}

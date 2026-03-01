@@ -353,16 +353,21 @@ async function handleRoute(request, { params }) {
   const integrations = await db.collection('integrations')
     .findOne({ workspaceId: user.workspaceId })
 
-  if (!integrations?.elevenlabs?.configured || !integrations?.elevenlabs?.apiKey) {
-    return jsonResponse({ voices: [] })
-  }
+ if (!integrations?.elevenlabs?.configured || !integrations?.elevenlabs?.apiKey) {
+  // fallback list so UI doesn't break
+  return jsonResponse({
+    source: 'fallback_not_configured',
+    voices: ELEVENLABS_VOICES
+  })
+}
 
   const decryptedKey = decrypt(integrations.elevenlabs.apiKey)
 
   const response = await fetch('https://api.elevenlabs.io/v1/voices', {
     headers: {
-      'xi-api-key': decryptedKey
-    },
+  'xi-api-key': decryptedKey,
+  'accept': 'application/json'
+},
     cache: 'no-store'
   })
 

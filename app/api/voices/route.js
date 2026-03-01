@@ -3,10 +3,10 @@ import { connectToMongo } from '@/lib/db'
 import { verifyToken, extractTokenFromHeader } from '@/lib/auth'
 import { decrypt } from '@/lib/encryption'
 
-// CORS helper (same style as your catch-all)
+// Helper function to handle CORS
 function handleCORS(response) {
   response.headers.set('Access-Control-Allow-Origin', process.env.CORS_ORIGINS || '*')
-  response.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH')
+  response.headers.set('Access-Control-Allow-Methods', 'GET, OPTIONS')
   response.headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization')
   response.headers.set('Access-Control-Allow-Credentials', 'true')
   return response
@@ -20,12 +20,11 @@ function errorResponse(message, status = 400) {
   return handleCORS(NextResponse.json({ error: message }, { status }))
 }
 
-// OPTIONS for CORS
 export async function OPTIONS() {
   return handleCORS(new NextResponse(null, { status: 200 }))
 }
 
-// Fallback voices (used when not connected)
+// Fallback list (only used when ElevenLabs integration isn’t configured)
 const FALLBACK_VOICES = [
   { id: 'rachel', name: 'Rachel', description: 'Warm and professional', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=rachel' },
   { id: 'adam', name: 'Adam', description: 'Deep and authoritative', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=adam' },
@@ -37,7 +36,7 @@ const FALLBACK_VOICES = [
   { id: 'elli', name: 'Elli', description: 'Young and vibrant', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=elli' },
 ]
 
-async function getUserFromAuth(request, db) {
+async function getUserFromRequest(request, db) {
   const authHeader = request.headers.get('authorization')
   const token = extractTokenFromHeader(authHeader)
   if (!token) return null
@@ -53,61 +52,55 @@ export async function GET(request) {
   try {
     const db = await connectToMongo()
 
-    // Must be logged in (we need workspaceId to find the stored ElevenLabs key)
-    const user = await getUserFromAuth(request, db)
+    // We try to auth (because integrations are per-workspace)
+    const user = await getUserFromRequest(request, db)
+
+    // If no auth, just return fallback public voices
     if (!user) {
-      // If not logged in, still return something so UI doesn't crash
-      return jsonResponse({ voices: FALLBACK_VOICES, source: 'fallback_not_logged_in' })
+      return jsonResponse({ source: 'fallback', voices: FALLBACK_VOICES })
     }
 
-    // Load integration doc
     const integrations = await db.collection('integrations').findOne({ workspaceId: user.workspaceId })
 
-    const configured = !!integrations?.elevenlabs?.configured
-    const encryptedKey = integrations?.elevenlabs?.apiKey
+    const eleven = integrations?.elevenlabs
+    const isConfigured = !!eleven?.configured && !!eleven?.apiKey
 
-    if (!configured || !encryptedKey) {
-      return jsonResponse({ voices: FALLBACK_VOICES, source: 'fallback_not_configured' })
+    if (!isConfigured) {
+      return jsonResponse({ source: 'fallback', voices: FALLBACK_VOICES })
     }
 
-    // Decrypt stored API key
-    let apiKey = null
-    try {
-      apiKey = decrypt(encryptedKey)
-    } catch (e) {
-      console.error('Failed to decrypt ElevenLabs key:', e)
-      return jsonResponse({ voices: FALLBACK_VOICES, source: 'fallback_decrypt_failed' })
-    }
+    const apiKey = decrypt(eleven.apiKey)
 
-    // Fetch voices from ElevenLabs
-    const response = await fetch('https://api.elevenlabs.io/v1/voices', {
+    const res = await fetch('https://api.elevenlabs.io/v1/voices', {
       method: 'GET',
       headers: {
         'xi-api-key': apiKey,
-        'accept': 'application/json',
+        'Content-Type': 'application/json',
       },
       cache: 'no-store',
     })
 
-    if (!response.ok) {
-      const errText = await response.text().catch(() => '')
-      console.error('ElevenLabs voices error:', response.status, errText)
-      return jsonResponse({ voices: FALLBACK_VOICES, source: 'fallback_elevenlabs_error' })
+    if (!res.ok) {
+      const text = await res.text().catch(() => '')
+      console.error('ElevenLabs voices fetch failed:', res.status, text)
+      return jsonResponse({ source: 'fallback', voices: FALLBACK_VOICES })
     }
 
-    const data = await response.json()
+    const data = await res.json()
 
-    // Normalize for your UI
-    const voices = (data?.voices || []).map(v => ({
+    const voices = (data?.voices || []).map((v) => ({
       id: v.voice_id,
       name: v.name,
-      description: (v.labels && (v.labels.description || v.labels.accent || v.labels.gender)) || '',
-      avatar: '',
+      description: v?.labels?.description || v?.description || '',
+      avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(v.voice_id)}`,
+      // Optional: keep raw fields if you want later
+      // category: v.category,
+      // labels: v.labels,
     }))
 
-    return jsonResponse({ voices, source: 'elevenlabs' })
-  } catch (error) {
-    console.error('GET /api/voices error:', error)
+    return jsonResponse({ source: 'elevenlabs', voices })
+  } catch (err) {
+    console.error('GET /api/voices error:', err)
     return errorResponse('Internal server error', 500)
   }
 }

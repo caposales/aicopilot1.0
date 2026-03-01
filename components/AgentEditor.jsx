@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -81,41 +81,63 @@ export default function AgentEditor({ agentType = 'inbound', title, description 
   const [selectedAgent, setSelectedAgent] = useState(null)
   const [voices, setVoices] = useState([])
   const [prompts, setPrompts] = useState([])
+  const [integrations, setIntegrations] = useState(null)
+
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
   const [view, setView] = useState('list') // 'list' or 'edit'
   const [formData, setFormData] = useState({ ...DEFAULT_FORM_DATA, name: `New ${agentType === 'inbound' ? 'Inbound' : 'Outbound'} Agent` })
 
+  const audioRef = useRef(null)
+  const [isPreviewing, setIsPreviewing] = useState(false)
+
   useEffect(() => {
     fetchData()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentType])
 
-  const fetchData = async () => {console.log("MARKER_AGENTEDITOR_FETCHDATA_RUNNING_V1")
+  const getAuthHeaders = () => {
     try {
       const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null
-      const headers = token ? { 'Authorization': `Bearer ${token}` } : {}
+      return token ? { Authorization: `Bearer ${token}` } : {}
+    } catch {
+      return {}
+    }
+  }
 
-      const token = localStorage.getItem('auth_token')
-const headers = token ? { Authorization: `Bearer ${token}` } : {}
+  const fetchData = async () => {
+    console.log('MARKER_AGENTEDITOR_FETCHDATA_RUNNING_V2')
+    setIsLoading(true)
+    try {
+      const headers = getAuthHeaders()
 
-const [voicesRes, promptsRes, agentsRes] = await Promise.all([
-  fetch(`${window.location.origin}/api/voices`, { headers }),
-  fetch(`${window.location.origin}/api/prompts`),
-  fetch(`${window.location.origin}/api/agents`, { headers }),
-])
+      const [voicesRes, promptsRes, agentsRes, integrationsRes] = await Promise.all([
+        fetch('/api/voices', { headers }),
+        fetch('/api/prompts'),
+        fetch('/api/agents', { headers }),
+        fetch('/api/integrations', { headers }),
+      ])
 
       const voicesData = await voicesRes.json()
       const promptsData = await promptsRes.json()
       const agentsData = await agentsRes.json()
 
+      let integrationsData = null
+      if (integrationsRes.ok) {
+        integrationsData = await integrationsRes.json()
+      } else {
+        // If user isn't logged in yet, /api/integrations will be 401 (expected)
+        integrationsData = null
+      }
+
       setVoices(voicesData.voices || [])
       setPrompts(promptsData.prompts || [])
 
-      // Filter agents by type
       const filteredAgents = (agentsData.agents || []).filter(a => a.agentType === agentType)
       setAgents(filteredAgents)
+
+      setIntegrations(integrationsData)
     } catch (error) {
       console.error('Failed to fetch data:', error)
       toast.error('Failed to load data')
@@ -252,6 +274,59 @@ const [voicesRes, promptsRes, agentsRes] = await Promise.all([
   }
 
   const selectedVoice = voices.find(v => v.id === formData.voiceId)
+
+  const isElevenLabsConfigured = Boolean(integrations?.elevenlabs?.configured)
+
+  const stopPreview = () => {
+    try {
+      if (audioRef.current) {
+        audioRef.current.pause()
+        audioRef.current.currentTime = 0
+      }
+    } catch {}
+    setIsPreviewing(false)
+  }
+
+  const handlePreview = async () => {
+    if (!selectedVoice) return
+
+    if (!isElevenLabsConfigured) {
+      toast.error('Connect ElevenLabs in Integrations first')
+      return
+    }
+
+    // If backend returns a previewUrl for each voice, we can play it immediately.
+    // If it does NOT, we still enable the button (so it’s not “hard coded disabled”),
+    // but we’ll tell you what’s missing.
+    const previewUrl =
+      selectedVoice.previewUrl ||
+      selectedVoice.preview_url ||
+      selectedVoice.preview ||
+      null
+
+    if (!previewUrl) {
+      toast.error('Preview audio URL is not available yet. (Your /api/voices response must include previewUrl or you need a TTS preview endpoint.)')
+      return
+    }
+
+    try {
+      setIsPreviewing(true)
+      stopPreview()
+
+      const audio = new Audio(previewUrl)
+      audioRef.current = audio
+      audio.onended = () => setIsPreviewing(false)
+      audio.onerror = () => {
+        setIsPreviewing(false)
+        toast.error('Failed to play preview audio')
+      }
+      await audio.play()
+    } catch (e) {
+      console.error(e)
+      setIsPreviewing(false)
+      toast.error('Browser blocked audio autoplay. Tap Preview again.')
+    }
+  }
 
   if (isLoading) {
     return (
@@ -502,7 +577,7 @@ const [voicesRes, promptsRes, agentsRes] = await Promise.all([
                     <div className="flex flex-col items-center text-center">
                       <Avatar className="w-12 h-12 mb-2">
                         <AvatarImage src={voice.avatar} alt={voice.name} />
-                        <AvatarFallback>{voice.name[0]}</AvatarFallback>
+                        <AvatarFallback>{voice.name?.[0] || 'V'}</AvatarFallback>
                       </Avatar>
                       <span className="font-medium text-sm">{voice.name}</span>
                       <span className="text-xs text-muted-foreground">{voice.description}</span>
@@ -523,16 +598,27 @@ const [voicesRes, promptsRes, agentsRes] = await Promise.all([
                   <div className="flex items-center gap-3">
                     <Avatar>
                       <AvatarImage src={selectedVoice.avatar} alt={selectedVoice.name} />
-                      <AvatarFallback>{selectedVoice.name[0]}</AvatarFallback>
+                      <AvatarFallback>{selectedVoice.name?.[0] || 'V'}</AvatarFallback>
                     </Avatar>
                     <div>
                       <p className="font-medium">{selectedVoice.name}</p>
                       <p className="text-sm text-muted-foreground">{selectedVoice.description}</p>
+                      {!isElevenLabsConfigured && (
+                        <p className="text-xs text-amber-600 mt-1">
+                          Connect ElevenLabs in Integrations to enable preview + live voices
+                        </p>
+                      )}
                     </div>
                   </div>
-                  <Button variant="outline" size="sm" disabled>
+
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={!isElevenLabsConfigured || isPreviewing}
+                    onClick={handlePreview}
+                  >
                     <Play className="w-4 h-4 mr-2" />
-                    Preview
+                    {isPreviewing ? 'Playing...' : 'Preview'}
                   </Button>
                 </div>
               )}
@@ -580,7 +666,7 @@ const [voicesRes, promptsRes, agentsRes] = await Promise.all([
                   className="font-mono text-sm"
                 />
                 <p className="text-xs text-muted-foreground">
-                  This prompt defines your agent's personality and behavior
+                  This prompt defines your agent&apos;s personality and behavior
                 </p>
               </div>
             </CardContent>

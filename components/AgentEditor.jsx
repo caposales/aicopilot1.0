@@ -82,6 +82,13 @@ export default function AgentEditor({ agentType = 'inbound', title, description 
   const [voices, setVoices] = useState([])
   const [prompts, setPrompts] = useState([])
   const [integrations, setIntegrations] = useState(null)
+  const getAuthHeaders = () => {
+  const token = typeof window !== 'undefined'
+    ? localStorage.getItem('auth_token')
+    : null
+
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
 
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)

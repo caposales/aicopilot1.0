@@ -348,8 +348,39 @@ async function handleRoute(request, { params }) {
 
     // Get voices list (public)
     if (route === '/voices' && method === 'GET') {
-      return jsonResponse({ voices: ELEVENLABS_VOICES })
-    }
+  if (!user) return errorResponse('Unauthorized', 401)
+
+  const integrations = await db.collection('integrations')
+    .findOne({ workspaceId: user.workspaceId })
+
+  if (!integrations?.elevenlabs?.configured || !integrations?.elevenlabs?.apiKey) {
+    return jsonResponse({ voices: [] })
+  }
+
+  const decryptedKey = decrypt(integrations.elevenlabs.apiKey)
+
+  const response = await fetch('https://api.elevenlabs.io/v1/voices', {
+    headers: {
+      'xi-api-key': decryptedKey
+    },
+    cache: 'no-store'
+  })
+
+  if (!response.ok) {
+    return errorResponse('Failed to fetch ElevenLabs voices', 500)
+  }
+
+  const data = await response.json()
+
+  return jsonResponse({
+    voices: data.voices.map(v => ({
+      id: v.voice_id,
+      name: v.name,
+      description: v.description || '',
+      avatar: ''
+    }))
+  })
+}
 
     // Get pre-made prompts (public)
     if (route === '/prompts' && method === 'GET') {

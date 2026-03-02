@@ -93,9 +93,7 @@ export async function GET(request) {
       name: v.name,
       description: v?.labels?.description || v?.description || '',
       avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(v.voice_id)}`,
-      // Optional: keep raw fields if you want later
-      // category: v.category,
-      // labels: v.labels,
+      previewUrl: v.preview_url || null,
     }))
 
     return jsonResponse({ source: 'elevenlabs', voices })

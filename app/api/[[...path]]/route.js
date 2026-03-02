@@ -346,106 +346,6 @@ async function handleRoute(request, { params }) {
       }
     }
 
-    // Get voices list (public)
-if (route === '/voices' && method === 'GET') {
-  // NOTE: UI calls /api/voices but route here is "/voices" inside the catch-all
-  if (!user) return errorResponse('Unauthorized', 401)
-
-  const integrations = await db.collection('integrations').findOne({ workspaceId: user.workspaceId })
-
-  const configured = !!integrations?.elevenlabs?.configured
-  const hasApiKey = !!integrations?.elevenlabs?.apiKey
-
-  // If not configured, return fallback so UI still shows something
-  if (!configured || !hasApiKey) {
-    return jsonResponse({
-      source: 'fallback_not_configured',
-      debug: { configured, hasApiKey },
-      voices: ELEVENLABS_VOICES
-    })
-  }
-
-  let decryptedKey = null
-  try {
-    decryptedKey = decrypt(integrations.elevenlabs.apiKey)
-  } catch (e) {
-    return jsonResponse({
-      source: 'fallback_decrypt_failed',
-      debug: { configured, hasApiKey, decryptError: String(e?.message || e) },
-      voices: ELEVENLABS_VOICES
-    })
-  }
-
-  try {
-    const response = await fetch('https://api.elevenlabs.io/v1/voices', {
-      headers: {
-        'xi-api-key': decryptedKey,
-        'accept': 'application/json'
-      },
-      cache: 'no-store'
-    })
-
-    const text = await response.text()
-    if (!response.ok) {
-      return jsonResponse({
-        source: 'fallback_elevenlabs_http_error',
-        debug: {
-          configured,
-          hasApiKey,
-          status: response.status,
-          body: text?.slice(0, 300)
-        },
-        voices: ELEVENLABS_VOICES
-      }, 200)
-    }
-
-    const data = JSON.parse(text)
-
-    return jsonResponse({
-      source: 'elevenlabs',
-      debug: { configured, hasApiKey, count: data?.voices?.length || 0 },
-      voices: (data?.voices || []).map(v => ({
-        id: v.voice_id,
-        name: v.name,
-        description: v.labels?.accent || v.labels?.description || v.description || '',
-        avatar: ''
-      }))
-    })
-  } catch (e) {
-    return jsonResponse({
-      source: 'fallback_elevenlabs_exception',
-      debug: { configured, hasApiKey, error: String(e?.message || e) },
-      voices: ELEVENLABS_VOICES
-    })
-  }
-}
-
-  const decryptedKey = decrypt(integrations.elevenlabs.apiKey)
-
-  const response = await fetch('https://api.elevenlabs.io/v1/voices', {
-    headers: {
-  'xi-api-key': decryptedKey,
-  'accept': 'application/json'
-},
-    cache: 'no-store'
-  })
-
-  if (!response.ok) {
-    return errorResponse('Failed to fetch ElevenLabs voices', 500)
-  }
-
-  const data = await response.json()
-
-  return jsonResponse({
-    voices: data.voices.map(v => ({
-      id: v.voice_id,
-      name: v.name,
-      description: v.description || '',
-      avatar: ''
-    }))
-  })
-}
-
     // Get pre-made prompts (public)
     if (route === '/prompts' && method === 'GET') {
       return jsonResponse({ prompts: PREMADE_PROMPTS })
@@ -1004,15 +904,18 @@ if (route === '/voices' && method === 'GET') {
         .sort({ createdAt: -1 })
         .toArray()
       
-      // Add workspace/owner info
-      const agentsWithOwner = await Promise.all(agents.map(async (agent) => {
-        const workspace = await db.collection('workspaces').findOne({ id: agent.workspaceId })
-        const owner = await db.collection('users').findOne({ workspaceId: agent.workspaceId, role: 'owner' })
-        return {
-          ...agent,
-          workspaceName: workspace?.name || 'Unknown',
-          ownerEmail: owner?.email || 'Unknown'
-        }
+      // Batch-fetch workspaces and owners to avoid N+1 queries
+      const workspaceIds = [...new Set(agents.map(a => a.workspaceId))]
+      const [workspacesList, ownersList] = await Promise.all([
+        db.collection('workspaces').find({ id: { $in: workspaceIds } }, { projection: { _id: 0, id: 1, name: 1 } }).toArray(),
+        db.collection('users').find({ workspaceId: { $in: workspaceIds }, role: 'owner' }, { projection: { _id: 0, workspaceId: 1, email: 1 } }).toArray()
+      ])
+      const wsMap = Object.fromEntries(workspacesList.map(w => [w.id, w]))
+      const ownerMap = Object.fromEntries(ownersList.map(o => [o.workspaceId, o]))
+      const agentsWithOwner = agents.map(agent => ({
+        ...agent,
+        workspaceName: wsMap[agent.workspaceId]?.name || 'Unknown',
+        ownerEmail: ownerMap[agent.workspaceId]?.email || 'Unknown'
       }))
       
       return jsonResponse({ agents: agentsWithOwner })
@@ -1273,27 +1176,35 @@ if (route === '/voices' && method === 'GET') {
         .sort({ createdAt: -1 })
         .toArray()
       
-      // Get owner info for each workspace
-      const clientsWithDetails = await Promise.all(workspaces.map(async (ws) => {
-        const owner = await db.collection('users').findOne(
-          { workspaceId: ws.id, role: 'owner' },
-          { projection: { _id: 0, password: 0 } }
-        )
-        const agentCount = await db.collection('agents').countDocuments({ workspaceId: ws.id })
-        const contactCount = await db.collection('contacts').countDocuments({ workspaceId: ws.id })
-        const integrations = await db.collection('integrations').findOne({ workspaceId: ws.id })
-        
-        return {
-          ...ws,
-          owner: owner || null,
-          stats: {
-            agents: agentCount,
-            contacts: contactCount,
-            hasIntegrations: {
-              twilio: integrations?.twilio?.configured || false,
-              ghl: integrations?.ghl?.configured || false,
-              calcom: integrations?.calcom?.configured || false
-            }
+      // Batch-fetch all owners, agent counts, contact counts, and integrations
+      const wsIds = workspaces.map(w => w.id)
+      const [ownersList, agentCounts, contactCounts, integrationsList] = await Promise.all([
+        db.collection('users').find({ workspaceId: { $in: wsIds }, role: 'owner' }, { projection: { _id: 0, password: 0 } }).toArray(),
+        db.collection('agents').aggregate([
+          { $match: { workspaceId: { $in: wsIds } } },
+          { $group: { _id: '$workspaceId', count: { $sum: 1 } } }
+        ]).toArray(),
+        db.collection('contacts').aggregate([
+          { $match: { workspaceId: { $in: wsIds } } },
+          { $group: { _id: '$workspaceId', count: { $sum: 1 } } }
+        ]).toArray(),
+        db.collection('integrations').find({ workspaceId: { $in: wsIds } }, { projection: { _id: 0, workspaceId: 1, twilio: 1, ghl: 1, calcom: 1 } }).toArray()
+      ])
+      const ownerByWs = Object.fromEntries(ownersList.map(o => [o.workspaceId, o]))
+      const agentCountByWs = Object.fromEntries(agentCounts.map(c => [c._id, c.count]))
+      const contactCountByWs = Object.fromEntries(contactCounts.map(c => [c._id, c.count]))
+      const integrationByWs = Object.fromEntries(integrationsList.map(i => [i.workspaceId, i]))
+      
+      const clientsWithDetails = workspaces.map(ws => ({
+        ...ws,
+        owner: ownerByWs[ws.id] || null,
+        stats: {
+          agents: agentCountByWs[ws.id] || 0,
+          contacts: contactCountByWs[ws.id] || 0,
+          hasIntegrations: {
+            twilio: integrationByWs[ws.id]?.twilio?.configured || false,
+            ghl: integrationByWs[ws.id]?.ghl?.configured || false,
+            calcom: integrationByWs[ws.id]?.calcom?.configured || false
           }
         }
       }))

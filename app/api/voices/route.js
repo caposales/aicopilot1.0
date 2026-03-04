@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { connectToMongo } from '@/lib/db'
 import { verifyToken, extractTokenFromHeader } from '@/lib/auth'
 import { decrypt } from '@/lib/encryption'
+import { hasPlatformKey, getPlatformKey } from '@/lib/platformKeys'
 
 // Helper function to handle CORS
 function handleCORS(response) {
@@ -55,21 +56,36 @@ export async function GET(request) {
     // We try to auth (because integrations are per-workspace)
     const user = await getUserFromRequest(request, db)
 
-    // If no auth, just return fallback public voices
-    if (!user) {
-      return jsonResponse({ source: 'fallback', voices: FALLBACK_VOICES })
+    // Resolve the ElevenLabs API key: workspace-level first, then platform-level
+    let apiKey = null
+    let keySource = 'none'
+
+    if (user) {
+      const integrations = await db.collection('integrations').findOne({ workspaceId: user.workspaceId })
+      const eleven = integrations?.elevenlabs
+      const isConfigured = !!eleven?.configured && !!eleven?.apiKey
+
+      if (isConfigured) {
+        try {
+          apiKey = decrypt(eleven.apiKey)
+          keySource = 'workspace'
+        } catch (e) {
+          // Fall through to platform key
+        }
+      }
     }
 
-    const integrations = await db.collection('integrations').findOne({ workspaceId: user.workspaceId })
-
-    const eleven = integrations?.elevenlabs
-    const isConfigured = !!eleven?.configured && !!eleven?.apiKey
-
-    if (!isConfigured) {
-      return jsonResponse({ source: 'fallback', voices: FALLBACK_VOICES })
+    if (!apiKey) {
+      const platformConfig = getPlatformKey('elevenlabs')
+      if (platformConfig?.apiKey) {
+        apiKey = platformConfig.apiKey
+        keySource = 'platform'
+      }
     }
 
-    const apiKey = decrypt(eleven.apiKey)
+    if (!apiKey) {
+      return jsonResponse({ source: 'fallback', voices: FALLBACK_VOICES })
+    }
 
     const res = await fetch('https://api.elevenlabs.io/v1/voices', {
       method: 'GET',
@@ -93,9 +109,6 @@ export async function GET(request) {
       name: v.name,
       description: v?.labels?.description || v?.description || '',
       avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(v.voice_id)}`,
-      // Optional: keep raw fields if you want later
-      // category: v.category,
-      // labels: v.labels,
     }))
 
     return jsonResponse({ source: 'elevenlabs', voices })

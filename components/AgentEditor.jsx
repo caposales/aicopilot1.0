@@ -82,13 +82,6 @@ export default function AgentEditor({ agentType = 'inbound', title, description 
   const [voices, setVoices] = useState([])
   const [prompts, setPrompts] = useState([])
   const [integrations, setIntegrations] = useState(null)
-  const getAuthHeaders = () => {
-  const token = typeof window !== 'undefined'
-    ? localStorage.getItem('auth_token')
-    : null
-
-  return token ? { Authorization: `Bearer ${token}` } : {}
-}
 
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
@@ -149,33 +142,6 @@ export default function AgentEditor({ agentType = 'inbound', title, description 
     } catch (error) {
       console.error("Failed to fetch data:", error)
       toast.error("Failed to load data")
-    } finally {
-      setIsLoading(false)
-    }
-  }
-
-      const voicesData = await voicesRes.json()
-      const promptsData = await promptsRes.json()
-      const agentsData = await agentsRes.json()
-
-      let integrationsData = null
-      if (integrationsRes.ok) {
-        integrationsData = await integrationsRes.json()
-      } else {
-        // If user isn't logged in yet, /api/integrations will be 401 (expected)
-        integrationsData = null
-      }
-
-      setVoices(voicesData.voices || [])
-      setPrompts(promptsData.prompts || [])
-
-      const filteredAgents = (agentsData.agents || []).filter(a => a.agentType === agentType)
-      setAgents(filteredAgents)
-
-      setIntegrations(integrationsData)
-    } catch (error) {
-      console.error('Failed to fetch data:', error)
-      toast.error('Failed to load data')
     } finally {
       setIsLoading(false)
     }

@@ -5,6 +5,7 @@ import { hashPassword, verifyPassword, generateToken, verifyToken, extractTokenF
 import { encrypt, decrypt, maskSecret } from '@/lib/encryption'
 import { isAdminEmail, isSuperAdmin, getAdminRole, hasPermission, isAnyAdmin, ADMIN_ROLES } from '@/lib/admin'
 import { logAuditEvent, getAuditLogs, AUDIT_ACTIONS } from '@/lib/audit'
+import { hasPlatformKey, getPlatformKey } from '@/lib/platformKeys'
 
 // Helper function to handle CORS
 function handleCORS(response) {
@@ -356,22 +357,32 @@ if (route === '/voices' && method === 'GET') {
   const configured = !!integrations?.elevenlabs?.configured
   const hasApiKey = !!integrations?.elevenlabs?.apiKey
 
-  // If not configured, return fallback so UI still shows something
-  if (!configured || !hasApiKey) {
+  // Resolve the ElevenLabs API key: workspace-level first, then platform-level
+  let decryptedKey = null
+  let keySource = 'none'
+
+  if (configured && hasApiKey) {
+    try {
+      decryptedKey = decrypt(integrations.elevenlabs.apiKey)
+      keySource = 'workspace'
+    } catch (e) {
+      // Fall through to platform key
+    }
+  }
+
+  if (!decryptedKey) {
+    const platformConfig = getPlatformKey('elevenlabs')
+    if (platformConfig?.apiKey) {
+      decryptedKey = platformConfig.apiKey
+      keySource = 'platform'
+    }
+  }
+
+  // If no key available at all, return fallback voices
+  if (!decryptedKey) {
     return jsonResponse({
       source: 'fallback_not_configured',
       debug: { configured, hasApiKey },
-      voices: ELEVENLABS_VOICES
-    })
-  }
-
-  let decryptedKey = null
-  try {
-    decryptedKey = decrypt(integrations.elevenlabs.apiKey)
-  } catch (e) {
-    return jsonResponse({
-      source: 'fallback_decrypt_failed',
-      debug: { configured, hasApiKey, decryptError: String(e?.message || e) },
       voices: ELEVENLABS_VOICES
     })
   }
@@ -392,6 +403,7 @@ if (route === '/voices' && method === 'GET') {
         debug: {
           configured,
           hasApiKey,
+          keySource,
           status: response.status,
           body: text?.slice(0, 300)
         },
@@ -403,7 +415,7 @@ if (route === '/voices' && method === 'GET') {
 
     return jsonResponse({
       source: 'elevenlabs',
-      debug: { configured, hasApiKey, count: data?.voices?.length || 0 },
+      debug: { configured, hasApiKey, keySource, count: data?.voices?.length || 0 },
       voices: (data?.voices || []).map(v => ({
         id: v.voice_id,
         name: v.name,
@@ -414,36 +426,10 @@ if (route === '/voices' && method === 'GET') {
   } catch (e) {
     return jsonResponse({
       source: 'fallback_elevenlabs_exception',
-      debug: { configured, hasApiKey, error: String(e?.message || e) },
+      debug: { configured, hasApiKey, keySource, error: String(e?.message || e) },
       voices: ELEVENLABS_VOICES
     })
   }
-}
-
-  const decryptedKey = decrypt(integrations.elevenlabs.apiKey)
-
-  const response = await fetch('https://api.elevenlabs.io/v1/voices', {
-    headers: {
-  'xi-api-key': decryptedKey,
-  'accept': 'application/json'
-},
-    cache: 'no-store'
-  })
-
-  if (!response.ok) {
-    return errorResponse('Failed to fetch ElevenLabs voices', 500)
-  }
-
-  const data = await response.json()
-
-  return jsonResponse({
-    voices: data.voices.map(v => ({
-      id: v.voice_id,
-      name: v.name,
-      description: v.description || '',
-      avatar: ''
-    }))
-  })
 }
 
     // Get pre-made prompts (public)
@@ -613,28 +599,39 @@ if (route === '/voices' && method === 'GET') {
         await db.collection('integrations').insertOne(integrations)
       }
       
-      // Return masked version
+      // Return masked version, including platform-level key status
+      const maskedField = (encryptedVal, provider) => {
+        if (encryptedVal) return maskSecret(decrypt(encryptedVal))
+        if (hasPlatformKey(provider)) return 'Platform configured'
+        return null
+      }
+
       const masked = {
         id: integrations.id,
         twilio: {
-          configured: integrations.twilio?.configured || false,
-          accountSid: integrations.twilio?.accountSid ? maskSecret(decrypt(integrations.twilio.accountSid)) : null,
+          configured: integrations.twilio?.configured || hasPlatformKey('twilio'),
+          platformProvided: hasPlatformKey('twilio'),
+          accountSid: maskedField(integrations.twilio?.accountSid, 'twilio'),
         },
         ghl: {
-          configured: integrations.ghl?.configured || false,
-          apiKey: integrations.ghl?.apiKey ? maskSecret(decrypt(integrations.ghl.apiKey)) : null,
+          configured: integrations.ghl?.configured || hasPlatformKey('ghl'),
+          platformProvided: hasPlatformKey('ghl'),
+          apiKey: maskedField(integrations.ghl?.apiKey, 'ghl'),
         },
         calcom: {
-          configured: integrations.calcom?.configured || false,
-          apiKey: integrations.calcom?.apiKey ? maskSecret(decrypt(integrations.calcom.apiKey)) : null,
+          configured: integrations.calcom?.configured || hasPlatformKey('calcom'),
+          platformProvided: hasPlatformKey('calcom'),
+          apiKey: maskedField(integrations.calcom?.apiKey, 'calcom'),
         },
         deepgram: {
-          configured: integrations.deepgram?.configured || false,
-          apiKey: integrations.deepgram?.apiKey ? maskSecret(decrypt(integrations.deepgram.apiKey)) : null,
+          configured: integrations.deepgram?.configured || hasPlatformKey('deepgram'),
+          platformProvided: hasPlatformKey('deepgram'),
+          apiKey: maskedField(integrations.deepgram?.apiKey, 'deepgram'),
         },
         elevenlabs: {
-          configured: integrations.elevenlabs?.configured || false,
-          apiKey: integrations.elevenlabs?.apiKey ? maskSecret(decrypt(integrations.elevenlabs.apiKey)) : null,
+          configured: integrations.elevenlabs?.configured || hasPlatformKey('elevenlabs'),
+          platformProvided: hasPlatformKey('elevenlabs'),
+          apiKey: maskedField(integrations.elevenlabs?.apiKey, 'elevenlabs'),
         }
       }
       

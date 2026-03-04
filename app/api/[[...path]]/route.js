@@ -370,9 +370,12 @@ if (route === '/voices' && method === 'GET') {
     }
   }
 
-  if (!decryptedKey && hasPlatformKey('elevenlabs')) {
-    decryptedKey = getPlatformKey('elevenlabs').apiKey
-    keySource = 'platform'
+  if (!decryptedKey) {
+    const platformConfig = getPlatformKey('elevenlabs')
+    if (platformConfig?.apiKey) {
+      decryptedKey = platformConfig.apiKey
+      keySource = 'platform'
+    }
   }
 
   // If no key available at all, return fallback voices
@@ -597,32 +600,38 @@ if (route === '/voices' && method === 'GET') {
       }
       
       // Return masked version, including platform-level key status
+      const maskedField = (encryptedVal, provider) => {
+        if (encryptedVal) return maskSecret(decrypt(encryptedVal))
+        if (hasPlatformKey(provider)) return 'Platform configured'
+        return null
+      }
+
       const masked = {
         id: integrations.id,
         twilio: {
           configured: integrations.twilio?.configured || hasPlatformKey('twilio'),
           platformProvided: hasPlatformKey('twilio'),
-          accountSid: integrations.twilio?.accountSid ? maskSecret(decrypt(integrations.twilio.accountSid)) : (hasPlatformKey('twilio') ? '••••••••(env)' : null),
+          accountSid: maskedField(integrations.twilio?.accountSid, 'twilio'),
         },
         ghl: {
           configured: integrations.ghl?.configured || hasPlatformKey('ghl'),
           platformProvided: hasPlatformKey('ghl'),
-          apiKey: integrations.ghl?.apiKey ? maskSecret(decrypt(integrations.ghl.apiKey)) : (hasPlatformKey('ghl') ? '••••••••(env)' : null),
+          apiKey: maskedField(integrations.ghl?.apiKey, 'ghl'),
         },
         calcom: {
           configured: integrations.calcom?.configured || hasPlatformKey('calcom'),
           platformProvided: hasPlatformKey('calcom'),
-          apiKey: integrations.calcom?.apiKey ? maskSecret(decrypt(integrations.calcom.apiKey)) : (hasPlatformKey('calcom') ? '••••••••(env)' : null),
+          apiKey: maskedField(integrations.calcom?.apiKey, 'calcom'),
         },
         deepgram: {
           configured: integrations.deepgram?.configured || hasPlatformKey('deepgram'),
           platformProvided: hasPlatformKey('deepgram'),
-          apiKey: integrations.deepgram?.apiKey ? maskSecret(decrypt(integrations.deepgram.apiKey)) : (hasPlatformKey('deepgram') ? '••••••••(env)' : null),
+          apiKey: maskedField(integrations.deepgram?.apiKey, 'deepgram'),
         },
         elevenlabs: {
           configured: integrations.elevenlabs?.configured || hasPlatformKey('elevenlabs'),
           platformProvided: hasPlatformKey('elevenlabs'),
-          apiKey: integrations.elevenlabs?.apiKey ? maskSecret(decrypt(integrations.elevenlabs.apiKey)) : (hasPlatformKey('elevenlabs') ? '••••••••(env)' : null),
+          apiKey: maskedField(integrations.elevenlabs?.apiKey, 'elevenlabs'),
         }
       }
       

@@ -75,9 +75,12 @@ export async function GET(request) {
       }
     }
 
-    if (!apiKey && hasPlatformKey('elevenlabs')) {
-      apiKey = getPlatformKey('elevenlabs').apiKey
-      keySource = 'platform'
+    if (!apiKey) {
+      const platformConfig = getPlatformKey('elevenlabs')
+      if (platformConfig?.apiKey) {
+        apiKey = platformConfig.apiKey
+        keySource = 'platform'
+      }
     }
 
     if (!apiKey) {

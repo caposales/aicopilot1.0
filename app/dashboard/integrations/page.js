@@ -20,7 +20,8 @@ import {
   EyeOff,
   Trash2,
   RefreshCw,
-  ExternalLink
+  ExternalLink,
+  ShieldCheck
 } from 'lucide-react'
 import {
   AlertDialog,
@@ -230,6 +231,12 @@ export default function IntegrationsPage() {
                           <Badge variant="secondary">
                             <XCircle className="w-3 h-3 mr-1" />
                             Not Connected
+                          </Badge>
+                        )}
+                        {status?.platformProvided && (
+                          <Badge variant="outline" className="border-blue-500 text-blue-600">
+                            <ShieldCheck className="w-3 h-3 mr-1" />
+                            Platform Provided
                           </Badge>
                         )}
                       </CardTitle>

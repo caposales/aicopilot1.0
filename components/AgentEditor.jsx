@@ -130,9 +130,7 @@ export default function AgentEditor({ agentType = 'inbound', title, description 
 
       setVoices(voicesData.voices || [])
       setPrompts(promptsData.prompts || [])
-
-      // ✅ If you have integrations state, keep this line; otherwise remove it
-      // setIntegrations?.(integrationsData)
+      setIntegrations(integrationsData)
 
       const filteredAgents = (agentsData.agents || []).filter(
         (a) => a.agentType === agentType
@@ -580,7 +578,7 @@ export default function AgentEditor({ agentType = 'inbound', title, description 
                         <AvatarFallback>{voice.name?.[0] || 'V'}</AvatarFallback>
                       </Avatar>
                       <span className="font-medium text-sm">{voice.name}</span>
-                      <span className="text-xs text-muted-foreground">{voice.description}</span>
+                      <span className="text-xs text-muted-foreground line-clamp-2 h-8">{voice.description?.slice(0, 50) || ''}{voice.description?.length > 50 ? '...' : ''}</span>
                     </div>
                     {formData.voiceId === voice.id && (
                       <div className="absolute top-2 right-2">
@@ -602,7 +600,7 @@ export default function AgentEditor({ agentType = 'inbound', title, description 
                     </Avatar>
                     <div>
                       <p className="font-medium">{selectedVoice.name}</p>
-                      <p className="text-sm text-muted-foreground">{selectedVoice.description}</p>
+                      <p className="text-sm text-muted-foreground">{selectedVoice.description?.slice(0, 80) || ''}{selectedVoice.description?.length > 80 ? '...' : ''}</p>
                       {!isElevenLabsConfigured && (
                         <p className="text-xs text-amber-600 mt-1">
                           Connect ElevenLabs in Integrations to enable preview + live voices

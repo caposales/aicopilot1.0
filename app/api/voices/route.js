@@ -26,14 +26,14 @@ export async function OPTIONS() {
 
 // Fallback list (only used when ElevenLabs integration isn’t configured)
 const FALLBACK_VOICES = [
-  { id: 'rachel', name: 'Rachel', description: 'Warm and professional', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=rachel' },
-  { id: 'adam', name: 'Adam', description: 'Deep and authoritative', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=adam' },
-  { id: 'emily', name: 'Emily', description: 'Friendly and approachable', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=emily' },
-  { id: 'josh', name: 'Josh', description: 'Casual and conversational', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=josh' },
-  { id: 'bella', name: 'Bella', description: 'Soft and calming', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=bella' },
-  { id: 'antoni', name: 'Antoni', description: 'Clear and articulate', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=antoni' },
-  { id: 'domi', name: 'Domi', description: 'Energetic and upbeat', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=domi' },
-  { id: 'elli', name: 'Elli', description: 'Young and vibrant', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=elli' },
+  { id: 'rachel', name: 'Rachel', description: 'Warm and professional', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=rachel', previewUrl: null },
+  { id: 'adam', name: 'Adam', description: 'Deep and authoritative', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=adam', previewUrl: null },
+  { id: 'emily', name: 'Emily', description: 'Friendly and approachable', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=emily', previewUrl: null },
+  { id: 'josh', name: 'Josh', description: 'Casual and conversational', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=josh', previewUrl: null },
+  { id: 'bella', name: 'Bella', description: 'Soft and calming', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=bella', previewUrl: null },
+  { id: 'antoni', name: 'Antoni', description: 'Clear and articulate', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=antoni', previewUrl: null },
+  { id: 'domi', name: 'Domi', description: 'Energetic and upbeat', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=domi', previewUrl: null },
+  { id: 'elli', name: 'Elli', description: 'Young and vibrant', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=elli', previewUrl: null },
 ]
 
 async function getUserFromRequest(request, db) {
@@ -93,9 +93,7 @@ export async function GET(request) {
       name: v.name,
       description: v?.labels?.description || v?.description || '',
       avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(v.voice_id)}`,
-      // Optional: keep raw fields if you want later
-      // category: v.category,
-      // labels: v.labels,
+      previewUrl: v.preview_url || null,
     }))
 
     return jsonResponse({ source: 'elevenlabs', voices })

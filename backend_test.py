@@ -11,7 +11,7 @@ import sys
 from datetime import datetime
 
 # Get base URL from environment or use default
-BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://restricted-panel.preview.emergentagent.com')
+BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'http://localhost:3000')
 API_URL = f"{BASE_URL}/api"
 
 class Colors:
@@ -1057,6 +1057,226 @@ class APITester:
                 
         except requests.exceptions.RequestException as e:
             self.log_result("Delete Agent", "FAIL", f"Connection error: {str(e)}")
+
+    def test_create_chatbot(self):
+        """Test POST /api/chatbots"""
+        if not self.auth_token:
+            self.log_result("Create Chatbot", "FAIL", "No auth token available")
+            return
+            
+        try:
+            chatbot_data = {
+                "name": "Test Support Bot",
+                "welcomeMessage": "Hi! How can I help you today?",
+                "systemPrompt": "You are a helpful customer support assistant. Be friendly and concise.",
+                "primaryColor": "#3b82f6",
+                "position": "bottom-right",
+                "headerTitle": "Chat with us",
+                "placeholderText": "Type a message...",
+                "knowledgeBase": "Our business hours are 9am-5pm Monday to Friday. We offer free shipping on orders over $50.",
+                "isActive": True
+            }
+            
+            headers = {"Authorization": f"Bearer {self.auth_token}"}
+            response = requests.post(f"{API_URL}/chatbots", 
+                                   json=chatbot_data,
+                                   headers=headers, 
+                                   timeout=10)
+            
+            if response.status_code == 201:
+                data = response.json()
+                required_fields = ["id", "name", "workspaceId"]
+                missing_fields = [field for field in required_fields if field not in data]
+                
+                if not missing_fields:
+                    self.chatbot_id = data["id"]
+                    self.log_result("Create Chatbot", "PASS", 
+                                  f"Chatbot created: {data['name']} (ID: {data['id'][:8]}...)")
+                else:
+                    self.log_result("Create Chatbot", "FAIL", 
+                                  f"Missing fields: {missing_fields}")
+            else:
+                self.log_result("Create Chatbot", "FAIL", 
+                              f"Status {response.status_code}: {response.text}")
+                
+        except requests.exceptions.RequestException as e:
+            self.log_result("Create Chatbot", "FAIL", f"Connection error: {str(e)}")
+
+    def test_list_chatbots(self):
+        """Test GET /api/chatbots"""
+        if not self.auth_token:
+            self.log_result("List Chatbots", "FAIL", "No auth token available")
+            return
+            
+        try:
+            headers = {"Authorization": f"Bearer {self.auth_token}"}
+            response = requests.get(f"{API_URL}/chatbots", 
+                                  headers=headers, 
+                                  timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                if "chatbots" in data and isinstance(data["chatbots"], list):
+                    chatbots = data["chatbots"]
+                    self.log_result("List Chatbots", "PASS", 
+                                  f"Retrieved {len(chatbots)} chatbots")
+                else:
+                    self.log_result("List Chatbots", "FAIL", 
+                                  "Invalid response format - missing chatbots array")
+            else:
+                self.log_result("List Chatbots", "FAIL", 
+                              f"Status {response.status_code}: {response.text}")
+                
+        except requests.exceptions.RequestException as e:
+            self.log_result("List Chatbots", "FAIL", f"Connection error: {str(e)}")
+
+    def test_get_chatbot(self):
+        """Test GET /api/chatbots/{id}"""
+        if not self.auth_token or not hasattr(self, 'chatbot_id'):
+            self.log_result("Get Chatbot", "FAIL", "No auth token or chatbot ID available")
+            return
+            
+        try:
+            headers = {"Authorization": f"Bearer {self.auth_token}"}
+            response = requests.get(f"{API_URL}/chatbots/{self.chatbot_id}", 
+                                  headers=headers, 
+                                  timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                required_fields = ["id", "name", "workspaceId"]
+                missing_fields = [field for field in required_fields if field not in data]
+                
+                if not missing_fields:
+                    self.log_result("Get Chatbot", "PASS", 
+                                  f"Retrieved chatbot: {data['name']}")
+                else:
+                    self.log_result("Get Chatbot", "FAIL", 
+                                  f"Missing fields: {missing_fields}")
+            else:
+                self.log_result("Get Chatbot", "FAIL", 
+                              f"Status {response.status_code}: {response.text}")
+                
+        except requests.exceptions.RequestException as e:
+            self.log_result("Get Chatbot", "FAIL", f"Connection error: {str(e)}")
+
+    def test_update_chatbot(self):
+        """Test PUT /api/chatbots/{id}"""
+        if not self.auth_token or not hasattr(self, 'chatbot_id'):
+            self.log_result("Update Chatbot", "FAIL", "No auth token or chatbot ID available")
+            return
+            
+        try:
+            update_data = {
+                "name": "Updated Support Bot",
+                "primaryColor": "#ff6b6b"
+            }
+            
+            headers = {"Authorization": f"Bearer {self.auth_token}"}
+            response = requests.put(f"{API_URL}/chatbots/{self.chatbot_id}", 
+                                  json=update_data,
+                                  headers=headers, 
+                                  timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("name") == update_data["name"]:
+                    self.log_result("Update Chatbot", "PASS", 
+                                  f"Chatbot updated successfully")
+                else:
+                    self.log_result("Update Chatbot", "FAIL", 
+                                  "Chatbot update did not reflect changes")
+            else:
+                self.log_result("Update Chatbot", "FAIL", 
+                              f"Status {response.status_code}: {response.text}")
+                
+        except requests.exceptions.RequestException as e:
+            self.log_result("Update Chatbot", "FAIL", f"Connection error: {str(e)}")
+
+    def test_chatbot_widget_script(self):
+        """Test GET /api/chatbots/{id}/widget.js (public endpoint)"""
+        if not hasattr(self, 'chatbot_id'):
+            self.log_result("Chatbot Widget Script", "FAIL", "No chatbot ID available")
+            return
+            
+        try:
+            response = requests.get(f"{API_URL}/chatbots/{self.chatbot_id}/widget.js", 
+                                  timeout=10)
+            
+            if response.status_code == 200:
+                content = response.text
+                # Check if it's JavaScript content
+                if "function" in content and "chatbot" in content.lower():
+                    self.log_result("Chatbot Widget Script", "PASS", 
+                                  f"Widget script generated successfully ({len(content)} chars)")
+                else:
+                    self.log_result("Chatbot Widget Script", "FAIL", 
+                                  "Widget script content invalid")
+            else:
+                self.log_result("Chatbot Widget Script", "FAIL", 
+                              f"Status {response.status_code}: {response.text}")
+                
+        except requests.exceptions.RequestException as e:
+            self.log_result("Chatbot Widget Script", "FAIL", f"Connection error: {str(e)}")
+
+    def test_chatbot_chat_endpoint(self):
+        """Test POST /api/chatbots/{id}/chat (public endpoint)"""
+        if not hasattr(self, 'chatbot_id'):
+            self.log_result("Chatbot Chat Endpoint", "FAIL", "No chatbot ID available")
+            return
+            
+        try:
+            chat_data = {
+                "message": "Hello, I need help with my order",
+                "history": []
+            }
+            
+            response = requests.post(f"{API_URL}/chatbots/{self.chatbot_id}/chat", 
+                                   json=chat_data,
+                                   timeout=30)  # Longer timeout for AI response
+            
+            if response.status_code == 200:
+                data = response.json()
+                if "reply" in data and data["reply"]:
+                    self.log_result("Chatbot Chat Endpoint", "PASS", 
+                                  f"AI response received: {data['reply'][:50]}...")
+                else:
+                    self.log_result("Chatbot Chat Endpoint", "FAIL", 
+                                  "No reply in response")
+            else:
+                self.log_result("Chatbot Chat Endpoint", "FAIL", 
+                              f"Status {response.status_code}: {response.text}")
+                
+        except requests.exceptions.RequestException as e:
+            self.log_result("Chatbot Chat Endpoint", "FAIL", f"Connection error: {str(e)}")
+
+    def test_delete_chatbot(self):
+        """Test DELETE /api/chatbots/{id}"""
+        if not self.auth_token or not hasattr(self, 'chatbot_id'):
+            self.log_result("Delete Chatbot", "FAIL", "No auth token or chatbot ID available")
+            return
+            
+        try:
+            headers = {"Authorization": f"Bearer {self.auth_token}"}
+            response = requests.delete(f"{API_URL}/chatbots/{self.chatbot_id}", 
+                                     headers=headers, 
+                                     timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("success"):
+                    self.log_result("Delete Chatbot", "PASS", 
+                                  "Chatbot deleted successfully")
+                else:
+                    self.log_result("Delete Chatbot", "FAIL", 
+                                  "Delete response incorrect")
+            else:
+                self.log_result("Delete Chatbot", "FAIL", 
+                              f"Status {response.status_code}: {response.text}")
+                
+        except requests.exceptions.RequestException as e:
+            self.log_result("Delete Chatbot", "FAIL", f"Connection error: {str(e)}")
     
     def run_all_tests(self):
         """Run all API tests in sequence"""
@@ -1123,9 +1343,19 @@ class APITester:
         self.test_contacts_api()
         self.test_bulk_contacts_import()
         
+        # Chatbots
+        print(f"\n{Colors.BLUE}=== Chatbot Tests ==={Colors.ENDC}")
+        self.test_create_chatbot()
+        self.test_list_chatbots()
+        self.test_get_chatbot()
+        self.test_update_chatbot()
+        self.test_chatbot_widget_script()
+        self.test_chatbot_chat_endpoint()
+        
         # Cleanup
         print(f"\n{Colors.BLUE}=== Cleanup Tests ==={Colors.ENDC}")
         self.test_delete_agent()
+        self.test_delete_chatbot()
         
         # Summary
         self.print_summary()

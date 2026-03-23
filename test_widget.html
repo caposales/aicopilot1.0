@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chatbot Widget Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 40px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 40px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        p {
+            color: #666;
+            line-height: 1.6;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Chatbot Widget Test Page</h1>
+        <p>This is a test page to demonstrate the chatbot widget functionality. The chatbot should appear as a floating bubble in the bottom-right corner of the page.</p>
+        
+        <h2>Features to Test:</h2>
+        <ul>
+            <li>Chatbot bubble appears in bottom-right corner</li>
+            <li>Click bubble to open chat window</li>
+            <li>Send a message and receive AI response</li>
+            <li>Chat window can be closed and reopened</li>
+            <li>Widget styling matches configuration</li>
+        </ul>
+        
+        <h2>Sample Questions to Try:</h2>
+        <ul>
+            <li>"What are your business hours?"</li>
+            <li>"Do you offer free shipping?"</li>
+            <li>"Hello, I need help with my order"</li>
+            <li>"Can you tell me about your return policy?"</li>
+        </ul>
+        
+        <p>The chatbot has been configured with knowledge about business hours (9am-5pm Monday to Friday) and should provide helpful responses based on this information.</p>
+    </div>
+
+    <!-- Chatbot Widget Script -->
+    <script src="http://localhost:3000/api/chatbots/fb9c1c44-e50c-4ae1-b896-f267b5368a68/widget.js" async></script>
+</body>
+</html>

@@ -420,32 +420,6 @@ if (route === '/voices' && method === 'GET') {
   }
 }
 
-  const decryptedKey = decrypt(integrations.elevenlabs.apiKey)
-
-  const response = await fetch('https://api.elevenlabs.io/v1/voices', {
-    headers: {
-  'xi-api-key': decryptedKey,
-  'accept': 'application/json'
-},
-    cache: 'no-store'
-  })
-
-  if (!response.ok) {
-    return errorResponse('Failed to fetch ElevenLabs voices', 500)
-  }
-
-  const data = await response.json()
-
-  return jsonResponse({
-    voices: data.voices.map(v => ({
-      id: v.voice_id,
-      name: v.name,
-      description: v.description || '',
-      avatar: ''
-    }))
-  })
-}
-
     // Get pre-made prompts (public)
     if (route === '/prompts' && method === 'GET') {
       return jsonResponse({ prompts: PREMADE_PROMPTS })
@@ -1472,6 +1446,702 @@ if (route === '/voices' && method === 'GET') {
       })
       
       return jsonResponse({ success: true })
+    }
+
+    // ====== CHATBOTS ======
+
+    // Create chatbot
+    if (route === '/chatbots' && method === 'POST') {
+      if (!user) return errorResponse('Unauthorized', 401)
+      
+      const body = await request.json()
+      const chatbotId = uuidv4()
+      
+      const chatbot = {
+        id: chatbotId,
+        workspaceId: user.workspaceId,
+        name: body.name || 'New Chatbot',
+        welcomeMessage: body.welcomeMessage || 'Hi! How can I help you today?',
+        systemPrompt: body.systemPrompt || 'You are a helpful assistant. Be friendly and concise.',
+        primaryColor: body.primaryColor || '#3b82f6',
+        position: body.position || 'bottom-right',
+        bubbleIcon: body.bubbleIcon || 'chat',
+        headerTitle: body.headerTitle || 'Chat with us',
+        placeholderText: body.placeholderText || 'Type a message...',
+        knowledgeBase: body.knowledgeBase || '',
+        isActive: body.isActive ?? true,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      }
+      
+      await db.collection('chatbots').insertOne(chatbot)
+      
+      const { _id, ...cleanChatbot } = chatbot
+      return jsonResponse(cleanChatbot, 201)
+    }
+
+    // List chatbots
+    if (route === '/chatbots' && method === 'GET') {
+      if (!user) return errorResponse('Unauthorized', 401)
+      
+      const chatbots = await db.collection('chatbots')
+        .find({ workspaceId: user.workspaceId })
+        .sort({ createdAt: -1 })
+        .limit(100)
+        .toArray()
+      
+      const cleanedChatbots = chatbots.map(({ _id, ...rest }) => rest)
+      return jsonResponse({ chatbots: cleanedChatbots })
+    }
+
+    // Get single chatbot
+    if (route.match(/^\/chatbots\/[^/]+$/) && method === 'GET') {
+      if (!user) return errorResponse('Unauthorized', 401)
+      
+      const chatbotId = path[1]
+      const chatbot = await db.collection('chatbots').findOne({ id: chatbotId, workspaceId: user.workspaceId })
+      
+      if (!chatbot) return errorResponse('Chatbot not found', 404)
+      
+      const { _id, ...cleanChatbot } = chatbot
+      return jsonResponse(cleanChatbot)
+    }
+
+    // Update chatbot
+    if (route.match(/^\/chatbots\/[^/]+$/) && method === 'PUT') {
+      if (!user) return errorResponse('Unauthorized', 401)
+      
+      const chatbotId = path[1]
+      const body = await request.json()
+      
+      const updateData = {
+        ...body,
+        updatedAt: new Date()
+      }
+      delete updateData.id
+      delete updateData.workspaceId
+      delete updateData._id
+      
+      const result = await db.collection('chatbots').findOneAndUpdate(
+        { id: chatbotId, workspaceId: user.workspaceId },
+        { $set: updateData },
+        { returnDocument: 'after' }
+      )
+      
+      if (!result) return errorResponse('Chatbot not found', 404)
+      
+      const { _id, ...cleanChatbot } = result
+      return jsonResponse(cleanChatbot)
+    }
+
+    // Delete chatbot
+    if (route.match(/^\/chatbots\/[^/]+$/) && method === 'DELETE') {
+      if (!user) return errorResponse('Unauthorized', 401)
+      
+      const chatbotId = path[1]
+      const result = await db.collection('chatbots').deleteOne({ id: chatbotId, workspaceId: user.workspaceId })
+      
+      if (result.deletedCount === 0) return errorResponse('Chatbot not found', 404)
+      
+      return jsonResponse({ success: true })
+    }
+
+    // ====== PUBLIC CHATBOT ENDPOINTS (for embed) ======
+
+    // Chatbot widget.js (embeddable script)
+    if (route.match(/^\/chatbots\/[^/]+\/widget\.js$/) && method === 'GET') {
+      const chatbotId = path[1]
+      const chatbot = await db.collection('chatbots').findOne({ id: chatbotId })
+      
+      if (!chatbot || !chatbot.isActive) {
+        return new Response('// Chatbot not found or inactive', {
+          headers: { 'Content-Type': 'application/javascript' }
+        })
+      }
+
+      const baseUrl = request.headers.get('origin') || request.headers.get('host') || ''
+      const protocol = baseUrl.includes('localhost') ? 'http' : 'https'
+      const fullBaseUrl = baseUrl.startsWith('http') ? baseUrl : `${protocol}://${baseUrl}`
+
+      const widgetScript = `
+(function() {
+  if (window.__chatbotWidget) return;
+  window.__chatbotWidget = true;
+  
+  var config = ${JSON.stringify({
+    id: chatbot.id,
+    welcomeMessage: chatbot.welcomeMessage,
+    primaryColor: chatbot.primaryColor,
+    position: chatbot.position,
+    headerTitle: chatbot.headerTitle,
+    placeholderText: chatbot.placeholderText
+  })};
+  
+  var baseUrl = "${fullBaseUrl}";
+  
+  // Styles
+  var styles = document.createElement('style');
+  styles.textContent = \`
+    .chatbot-widget-container {
+      position: fixed;
+      \${config.position === 'bottom-left' ? 'left: 20px;' : 'right: 20px;'}
+      bottom: 20px;
+      z-index: 999999;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+    .chatbot-bubble {
+      width: 60px;
+      height: 60px;
+      border-radius: 50%;
+      background: \${config.primaryColor};
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .chatbot-bubble:hover {
+      transform: scale(1.05);
+      box-shadow: 0 6px 16px rgba(0,0,0,0.2);
+    }
+    .chatbot-bubble svg {
+      width: 28px;
+      height: 28px;
+      fill: white;
+    }
+    .chatbot-window {
+      position: absolute;
+      bottom: 70px;
+      \${config.position === 'bottom-left' ? 'left: 0;' : 'right: 0;'}
+      width: 380px;
+      height: 520px;
+      background: white;
+      border-radius: 16px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.15);
+      display: none;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .chatbot-window.open {
+      display: flex;
+    }
+    .chatbot-header {
+      background: \${config.primaryColor};
+      color: white;
+      padding: 16px 20px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .chatbot-close {
+      background: none;
+      border: none;
+      color: white;
+      cursor: pointer;
+      font-size: 20px;
+      padding: 0;
+      line-height: 1;
+    }
+    .chatbot-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .chatbot-message {
+      max-width: 80%;
+      padding: 12px 16px;
+      border-radius: 16px;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    .chatbot-message.bot {
+      background: #f1f5f9;
+      color: #1e293b;
+      align-self: flex-start;
+      border-bottom-left-radius: 4px;
+    }
+    .chatbot-message.user {
+      background: \${config.primaryColor};
+      color: white;
+      align-self: flex-end;
+      border-bottom-right-radius: 4px;
+    }
+    .chatbot-message.typing {
+      background: #f1f5f9;
+      align-self: flex-start;
+    }
+    .chatbot-typing-dots {
+      display: flex;
+      gap: 4px;
+    }
+    .chatbot-typing-dots span {
+      width: 8px;
+      height: 8px;
+      background: #94a3b8;
+      border-radius: 50%;
+      animation: chatbot-bounce 1.4s infinite ease-in-out both;
+    }
+    .chatbot-typing-dots span:nth-child(1) { animation-delay: -0.32s; }
+    .chatbot-typing-dots span:nth-child(2) { animation-delay: -0.16s; }
+    @keyframes chatbot-bounce {
+      0%, 80%, 100% { transform: scale(0); }
+      40% { transform: scale(1); }
+    }
+    .chatbot-input-area {
+      padding: 12px 16px;
+      border-top: 1px solid #e2e8f0;
+      display: flex;
+      gap: 8px;
+    }
+    .chatbot-input {
+      flex: 1;
+      border: 1px solid #e2e8f0;
+      border-radius: 24px;
+      padding: 10px 16px;
+      font-size: 14px;
+      outline: none;
+    }
+    .chatbot-input:focus {
+      border-color: \${config.primaryColor};
+    }
+    .chatbot-send {
+      width: 40px;
+      height: 40px;
+      border: none;
+      border-radius: 50%;
+      background: \${config.primaryColor};
+      color: white;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .chatbot-send:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .chatbot-send svg {
+      width: 18px;
+      height: 18px;
+      fill: white;
+    }
+  \`;
+  document.head.appendChild(styles);
+  
+  // Widget HTML
+  var container = document.createElement('div');
+  container.className = 'chatbot-widget-container';
+  container.innerHTML = \`
+    <div class="chatbot-window" id="chatbot-window">
+      <div class="chatbot-header">
+        <span>\${config.headerTitle}</span>
+        <button class="chatbot-close" onclick="window.toggleChatbot()">&times;</button>
+      </div>
+      <div class="chatbot-messages" id="chatbot-messages"></div>
+      <div class="chatbot-input-area">
+        <input type="text" class="chatbot-input" id="chatbot-input" placeholder="\${config.placeholderText}" />
+        <button class="chatbot-send" id="chatbot-send">
+          <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="chatbot-bubble" onclick="window.toggleChatbot()">
+      <svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/></svg>
+    </div>
+  \`;
+  document.body.appendChild(container);
+  
+  var isOpen = false;
+  var messages = [];
+  var isLoading = false;
+  
+  window.toggleChatbot = function() {
+    isOpen = !isOpen;
+    document.getElementById('chatbot-window').classList.toggle('open', isOpen);
+    if (isOpen && messages.length === 0) {
+      addMessage(config.welcomeMessage, 'bot');
+    }
+  };
+  
+  function addMessage(text, type) {
+    messages.push({ text: text, type: type });
+    renderMessages();
+  }
+  
+  function renderMessages() {
+    var container = document.getElementById('chatbot-messages');
+    container.innerHTML = messages.map(function(m) {
+      return '<div class="chatbot-message ' + m.type + '">' + escapeHtml(m.text) + '</div>';
+    }).join('');
+    if (isLoading) {
+      container.innerHTML += '<div class="chatbot-message typing"><div class="chatbot-typing-dots"><span></span><span></span><span></span></div></div>';
+    }
+    container.scrollTop = container.scrollHeight;
+  }
+  
+  function escapeHtml(text) {
+    var div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  }
+  
+  async function sendMessage() {
+    var input = document.getElementById('chatbot-input');
+    var text = input.value.trim();
+    if (!text || isLoading) return;
+    
+    input.value = '';
+    addMessage(text, 'user');
+    isLoading = true;
+    renderMessages();
+    
+    try {
+      var response = await fetch(baseUrl + '/api/chatbots/' + config.id + '/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: text, history: messages.slice(-10) })
+      });
+      var data = await response.json();
+      isLoading = false;
+      addMessage(data.reply || 'Sorry, something went wrong.', 'bot');
+    } catch (e) {
+      isLoading = false;
+      addMessage('Sorry, I could not connect. Please try again.', 'bot');
+    }
+  }
+  
+  document.getElementById('chatbot-send').addEventListener('click', sendMessage);
+  document.getElementById('chatbot-input').addEventListener('keypress', function(e) {
+    if (e.key === 'Enter') sendMessage();
+  });
+})();
+`;
+
+      return new Response(widgetScript, {
+        headers: { 
+          'Content-Type': 'application/javascript',
+          'Access-Control-Allow-Origin': '*'
+        }
+      })
+    }
+
+    // Chatbot chat endpoint (public - no auth needed for embed)
+    if (route.match(/^\/chatbots\/[^/]+\/chat$/) && method === 'POST') {
+      const chatbotId = path[1]
+      const chatbot = await db.collection('chatbots').findOne({ id: chatbotId })
+      
+      if (!chatbot || !chatbot.isActive) {
+        return errorResponse('Chatbot not found or inactive', 404)
+      }
+
+      const body = await request.json()
+      const { message, history = [] } = body
+
+      if (!message) {
+        return errorResponse('Message is required')
+      }
+
+      // Build system prompt with knowledge base
+      let systemPrompt = chatbot.systemPrompt || 'You are a helpful assistant.'
+      if (chatbot.knowledgeBase) {
+        systemPrompt += `\n\nUse the following knowledge base to help answer questions:\n${chatbot.knowledgeBase}`
+      }
+
+      // Build conversation history
+      const conversationMessages = [
+        { role: 'system', content: systemPrompt }
+      ]
+
+      // Add history (last 10 messages)
+      for (const msg of history.slice(-10)) {
+        if (msg.type === 'user') {
+          conversationMessages.push({ role: 'user', content: msg.text })
+        } else if (msg.type === 'bot') {
+          conversationMessages.push({ role: 'assistant', content: msg.text })
+        }
+      }
+
+      // Add current message
+      conversationMessages.push({ role: 'user', content: message })
+
+      try {
+        // Call Emergent LLM API
+        const llmResponse = await fetch('https://integrations.emergentagent.com/llm/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${process.env.EMERGENT_LLM_KEY}`
+          },
+          body: JSON.stringify({
+            model: 'gpt-5.2',
+            messages: conversationMessages,
+            max_tokens: 500
+          })
+        })
+
+        const llmData = await llmResponse.json()
+        const reply = llmData.choices?.[0]?.message?.content || 'Sorry, I could not process your request.'
+
+        // Log the conversation
+        await db.collection('chatbot_conversations').insertOne({
+          id: uuidv4(),
+          chatbotId: chatbot.id,
+          workspaceId: chatbot.workspaceId,
+          userMessage: message,
+          botReply: reply,
+          createdAt: new Date()
+        })
+
+        return jsonResponse({ reply })
+      } catch (error) {
+        console.error('LLM API error:', error)
+        return errorResponse('Failed to get AI response', 500)
+      }
+    }
+
+    // Chatbot test page
+    if (route.match(/^\/chatbots\/[^/]+\/test$/) && method === 'GET') {
+      const chatbotId = path[1]
+      const chatbot = await db.collection('chatbots').findOne({ id: chatbotId })
+      
+      if (!chatbot) {
+        return new Response('Chatbot not found', { status: 404 })
+      }
+
+      const baseUrl = request.headers.get('origin') || `https://${request.headers.get('host')}`
+
+      const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Test: ${chatbot.name}</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 40px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+    }
+    .test-info {
+      background: white;
+      padding: 24px;
+      border-radius: 12px;
+      max-width: 500px;
+      margin: 0 auto 40px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.1);
+    }
+    h1 { margin: 0 0 8px; color: #1e293b; }
+    p { margin: 0; color: #64748b; }
+  </style>
+</head>
+<body>
+  <div class="test-info">
+    <h1>Testing: ${chatbot.name}</h1>
+    <p>The chat widget should appear in the ${chatbot.position === 'bottom-left' ? 'bottom-left' : 'bottom-right'} corner.</p>
+  </div>
+  <script src="${baseUrl}/api/chatbots/${chatbotId}/widget.js" async></script>
+</body>
+</html>`
+
+      return new Response(html, {
+        headers: { 'Content-Type': 'text/html' }
+      })
+    }
+
+    // Chatbot embed page (iframe)
+    if (route.match(/^\/chatbots\/[^/]+\/embed$/) && method === 'GET') {
+      const chatbotId = path[1]
+      const chatbot = await db.collection('chatbots').findOne({ id: chatbotId })
+      
+      if (!chatbot || !chatbot.isActive) {
+        return new Response('Chatbot not found or inactive', { status: 404 })
+      }
+
+      const baseUrl = request.headers.get('origin') || `https://${request.headers.get('host')}`
+
+      const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${chatbot.headerTitle}</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      background: white;
+    }
+    .header {
+      background: ${chatbot.primaryColor};
+      color: white;
+      padding: 16px 20px;
+      font-weight: 600;
+    }
+    .messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .message {
+      max-width: 80%;
+      padding: 12px 16px;
+      border-radius: 16px;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    .message.bot {
+      background: #f1f5f9;
+      color: #1e293b;
+      align-self: flex-start;
+      border-bottom-left-radius: 4px;
+    }
+    .message.user {
+      background: ${chatbot.primaryColor};
+      color: white;
+      align-self: flex-end;
+      border-bottom-right-radius: 4px;
+    }
+    .typing-dots {
+      display: flex;
+      gap: 4px;
+      padding: 12px 16px;
+      background: #f1f5f9;
+      border-radius: 16px;
+      align-self: flex-start;
+    }
+    .typing-dots span {
+      width: 8px;
+      height: 8px;
+      background: #94a3b8;
+      border-radius: 50%;
+      animation: bounce 1.4s infinite ease-in-out both;
+    }
+    .typing-dots span:nth-child(1) { animation-delay: -0.32s; }
+    .typing-dots span:nth-child(2) { animation-delay: -0.16s; }
+    @keyframes bounce {
+      0%, 80%, 100% { transform: scale(0); }
+      40% { transform: scale(1); }
+    }
+    .input-area {
+      padding: 12px 16px;
+      border-top: 1px solid #e2e8f0;
+      display: flex;
+      gap: 8px;
+    }
+    .input {
+      flex: 1;
+      border: 1px solid #e2e8f0;
+      border-radius: 24px;
+      padding: 10px 16px;
+      font-size: 14px;
+      outline: none;
+    }
+    .input:focus { border-color: ${chatbot.primaryColor}; }
+    .send-btn {
+      width: 40px;
+      height: 40px;
+      border: none;
+      border-radius: 50%;
+      background: ${chatbot.primaryColor};
+      color: white;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .send-btn svg { width: 18px; height: 18px; fill: white; }
+  </style>
+</head>
+<body>
+  <div class="header">${chatbot.headerTitle}</div>
+  <div class="messages" id="messages"></div>
+  <div class="input-area">
+    <input type="text" class="input" id="input" placeholder="${chatbot.placeholderText}" />
+    <button class="send-btn" id="send">
+      <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+    </button>
+  </div>
+  <script>
+    var messages = [];
+    var isLoading = false;
+    var chatbotId = "${chatbotId}";
+    var welcomeMessage = "${chatbot.welcomeMessage.replace(/"/g, '\\"')}";
+    
+    function escapeHtml(text) {
+      var div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+    
+    function render() {
+      var html = messages.map(function(m) {
+        return '<div class="message ' + m.type + '">' + escapeHtml(m.text) + '</div>';
+      }).join('');
+      if (isLoading) {
+        html += '<div class="typing-dots"><span></span><span></span><span></span></div>';
+      }
+      document.getElementById('messages').innerHTML = html;
+      document.getElementById('messages').scrollTop = document.getElementById('messages').scrollHeight;
+    }
+    
+    function addMessage(text, type) {
+      messages.push({ text: text, type: type });
+      render();
+    }
+    
+    async function send() {
+      var input = document.getElementById('input');
+      var text = input.value.trim();
+      if (!text || isLoading) return;
+      
+      input.value = '';
+      addMessage(text, 'user');
+      isLoading = true;
+      render();
+      
+      try {
+        var res = await fetch('/api/chatbots/' + chatbotId + '/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: text, history: messages.slice(-10) })
+        });
+        var data = await res.json();
+        isLoading = false;
+        addMessage(data.reply || 'Sorry, something went wrong.', 'bot');
+      } catch (e) {
+        isLoading = false;
+        addMessage('Sorry, I could not connect.', 'bot');
+      }
+    }
+    
+    document.getElementById('send').addEventListener('click', send);
+    document.getElementById('input').addEventListener('keypress', function(e) {
+      if (e.key === 'Enter') send();
+    });
+    
+    // Show welcome message
+    addMessage(welcomeMessage, 'bot');
+  </script>
+</body>
+</html>`
+
+      return new Response(html, {
+        headers: { 'Content-Type': 'text/html' }
+      })
     }
 
     // Route not found

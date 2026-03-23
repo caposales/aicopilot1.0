@@ -22,7 +22,8 @@ import {
   Menu,
   X,
   Shield,
-  Users
+  Users,
+  MessageSquare
 } from 'lucide-react'
 import {
   Collapsible,
@@ -42,6 +43,7 @@ const navigation = [
       { name: 'Outbound Agent', href: '/dashboard/agents/outbound' },
     ]
   },
+  { name: 'Chatbots', href: '/dashboard/chatbots', icon: MessageSquare },
   { name: 'Contacts', href: '/dashboard/contacts', icon: Users },
   { name: 'Call Logs', href: '/dashboard/call-logs', icon: FileText },
   { name: 'Error Logs', href: '/dashboard/error-logs', icon: AlertTriangle },

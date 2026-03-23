@@ -1,146 +1,84 @@
-# ENT Solutions - Voice AI Agent Platform PRD
-
-## Overview
-A comprehensive Voice AI Agent Platform for businesses to create and manage AI-powered voice agents for inbound and outbound calls.
+# AI Copilot 1.0 - Product Requirements Document
 
 ## Original Problem Statement
-- Add admin page with email whitelist authorization
-- Implement role-based permissions (Super Admin vs Moderator)
-- Add admin user creation/invite feature with audit logging
-- Platform provides Deepgram/ElevenLabs keys, clients bring Twilio/GHL/Cal.com
-- Add bulk contact import functionality
-- Enhanced agent settings with call transfer and calendar booking options
-- Admin panel to view all clients with drill-down to agents/settings
+User has an AI agent making platform (Next.js + MongoDB + Twilio) for call bots. They requested adding an embeddable chatbot widget feature with:
+- Both general AI chat and custom knowledge base bots
+- Basic colors/branding customization
+- Both script tag and iframe embed options
+- Using Emergent Universal API key for AI (gpt-5.2)
+- Floating bubble style widget
 
 ## Architecture
-- **Frontend**: Next.js 14 with React, Tailwind CSS, shadcn/ui components
-- **Backend**: Next.js API Routes (proxied through FastAPI)
+- **Frontend**: Next.js 14 with Tailwind CSS, shadcn/ui components
+- **Backend**: Next.js API routes (catch-all pattern)
 - **Database**: MongoDB
-- **Authentication**: JWT-based with email whitelist for admins
+- **AI**: Emergent Universal API (gpt-5.2 via integrations.emergentagent.com)
+- **Auth**: JWT-based authentication
 
 ## User Personas
+1. **Business Owner**: Wants to add AI chatbot to their website without coding
+2. **Marketing Agency**: Needs customizable chatbots for multiple client sites
+3. **Developer**: Wants easy embed options (script tag or iframe)
 
-### 1. Super Admin
-- Full platform access
-- Can invite/manage other admins
-- Can view all clients and their data
-- Can delete users and content
-- Can access audit logs
+## Core Requirements
+- [x] Chatbot CRUD operations (create, read, update, delete)
+- [x] Customizable appearance (color, position, branding)
+- [x] Knowledge base support for custom training
+- [x] Embeddable widget (script tag)
+- [x] Embeddable widget (iframe)
+- [x] AI chat using Emergent LLM API
+- [x] Multi-turn conversation support
+- [x] Test page for previewing chatbots
 
-### 2. Moderator
-- Read-only admin access
-- Can view users, clients, and audit logs
-- Cannot delete or modify data
-- Cannot invite admins
+## What's Been Implemented (March 23, 2026)
 
-### 3. Client/User
-- Manages their own workspace
-- Creates/configures voice agents
-- Imports and manages contacts
-- Configures integrations (Twilio, GHL, Cal.com)
+### Chatbot Widget Feature
+1. **New Dashboard Page**: `/dashboard/chatbots` - Create and manage chatbot widgets
+2. **ChatbotEditor Component**: Full CRUD UI with tabs for settings, appearance, knowledge base, and embed code
+3. **API Endpoints**:
+   - `POST /api/chatbots` - Create chatbot
+   - `GET /api/chatbots` - List chatbots
+   - `GET /api/chatbots/:id` - Get single chatbot
+   - `PUT /api/chatbots/:id` - Update chatbot
+   - `DELETE /api/chatbots/:id` - Delete chatbot
+   - `GET /api/chatbots/:id/widget.js` - Embeddable widget script
+   - `POST /api/chatbots/:id/chat` - AI chat endpoint (public)
+   - `GET /api/chatbots/:id/test` - Test page
+   - `GET /api/chatbots/:id/embed` - iframe embed page
 
-## Core Features Implemented
+4. **Widget Features**:
+   - Floating bubble that opens chat window
+   - Customizable colors and positioning
+   - Welcome message
+   - Typing indicator
+   - Message history
+   - Knowledge base integration for context-aware responses
 
-### Admin Panel ✅
-- **Dashboard**: Platform stats, recent users, recent activity
-- **User Management**: View all users, change roles, delete users
-- **Client Management**: View all workspaces, drill-down to see agents/contacts
-- **Content Management**: Manage agents, call logs, error logs across platform
-- **Audit Logs**: Track all system activities (login, agent creation, contacts imported)
-
-### Role-Based Permissions ✅
-- Super Admin: Full access (defined by ADMIN_EMAILS env)
-- Moderator: View-only access (assigned via admin panel)
-- Regular User: Own workspace only
-
-### Admin Invite System ✅
-- Super admins can invite new admins
-- Mock email implementation (logs to console)
-- Invite updates existing user roles if found
-
-### Bulk Contact Import ✅
-- CSV paste or file upload
-- Supports common field names (first_name, email, phone, etc.)
-- Up to 1000 contacts per import
-- Audit logged
-
-### Enhanced Agent Settings ✅
-- **Call Transfer**:
-  - Enable/disable toggle
-  - Transfer phone number
-  - Transfer conditions (on request, on escalation, always offer)
-  - Custom transfer message
-  
-- **Calendar Booking**:
-  - Enable/disable toggle
-  - Provider selection (Cal.com or GoHighLevel)
-  - Event type ID
-  - Confirmation message
-
-### Audit Logging ✅
-Tracks:
-- User login/logout/register
-- Admin invite sent, role changes
-- User deleted
-- Agent created/updated/deleted
-- Contacts imported, created, deleted
-- Integration configured
-
-## Configuration
-
-### Environment Variables
-```
-ADMIN_EMAILS=admin@example.com,admin2@example.com  # Super admin emails
-JWT_SECRET=your-secret-key
-MONGO_URL=mongodb://localhost:27017
-DB_NAME=test_database
-```
-
-### Test Credentials
-- Admin: admin@example.com / admin123
-- Regular User: user@test.com / user123
-
-## What's Been Implemented (Feb 2026)
-
-### Phase 1 - Admin Foundation ✅
-- Admin page with email whitelist authorization
-- Super Admin vs Moderator roles
-- Admin sidebar with navigation
-
-### Phase 2 - Enhanced Admin ✅
-- Admin dashboard with stats
-- User management with role controls
-- Client management with drill-down views
-- Audit log viewer with filters
-- Admin invite functionality (mock email)
-
-### Phase 3 - Client Features ✅
-- Contacts page with CRUD operations
-- Bulk contact import (CSV paste/upload)
-- Enhanced agent editor with:
-  - Call transfer settings
-  - Calendar booking settings (Cal.com/GHL)
+5. **Navigation**: Added "Chatbots" link in Sidebar
 
 ## Prioritized Backlog
 
 ### P0 (Critical)
-- [ ] Integrate actual Deepgram/ElevenLabs keys for voice
-- [ ] Implement real Twilio integration for calls
-- [ ] Connect Cal.com/GHL calendar booking
+- None remaining
 
-### P1 (Important)
-- [ ] Real email sending for admin invites
-- [ ] Outbound calling campaign feature
-- [ ] Call recording and transcription
+### P1 (High Priority)
+- Analytics dashboard for chatbot conversations
+- Export conversation logs
+- Rate limiting for public chat endpoint
 
-### P2 (Nice to Have)
-- [ ] Export contacts to CSV
-- [ ] Batch agent operations
-- [ ] Custom analytics dashboard
-- [ ] Webhook testing interface
+### P2 (Medium Priority)
+- File upload for knowledge base (PDF, docs)
+- Multiple chatbot personas/agents per widget
+- Chatbot conversation analytics
+- A/B testing for welcome messages
+
+### P3 (Future)
+- Voice input/output for chatbot
+- Multilingual support
+- Integration with CRM (GHL, etc.)
+- White-label options for agencies
 
 ## Next Tasks
-1. Obtain Deepgram/ElevenLabs API keys for voice AI
-2. Client Twilio integration for phone numbers
-3. Cal.com/GHL OAuth integration for booking
-4. Real email provider (Resend/SendGrid) for invites
+1. Test external URL routing (may need ingress configuration)
+2. Add conversation analytics/logs view in dashboard
+3. Consider rate limiting for public endpoints

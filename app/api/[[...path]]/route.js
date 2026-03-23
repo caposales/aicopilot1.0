@@ -1813,15 +1813,21 @@ if (route === '/voices' && method === 'GET') {
     renderMessages();
     
     try {
+      console.log('Chatbot: Sending to', baseUrl + '/api/chatbots/' + config.id + '/chat');
       var response = await fetch(baseUrl + '/api/chatbots/' + config.id + '/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: text, history: messages.slice(-10) })
       });
+      if (!response.ok) {
+        console.error('Chatbot API error:', response.status, response.statusText);
+        throw new Error('API returned ' + response.status);
+      }
       var data = await response.json();
       isLoading = false;
       addMessage(data.reply || 'Sorry, something went wrong.', 'bot');
     } catch (e) {
+      console.error('Chatbot error:', e, 'BaseURL:', baseUrl);
       isLoading = false;
       addMessage('Sorry, I could not connect. Please try again.', 'bot');
     }

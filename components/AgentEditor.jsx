@@ -126,11 +126,18 @@ export default function AgentEditor({ agentType = 'inbound', title, description 
       const voicesData = await voicesRes.json()
       const promptsData = await promptsRes.json()
       const agentsData = await agentsRes.json()
-      const integrationsData = await integrationsRes.json()
+      
+      // Only set integrations if response is OK (not 401 Unauthorized)
+      if (integrationsRes.ok) {
+        const integrationsData = await integrationsRes.json()
+        setIntegrations(integrationsData)
+      } else {
+        console.log('Integrations fetch failed:', integrationsRes.status)
+        setIntegrations(null)
+      }
 
       setVoices(voicesData.voices || [])
       setPrompts(promptsData.prompts || [])
-      setIntegrations(integrationsData)
 
       const filteredAgents = (agentsData.agents || []).filter(
         (a) => a.agentType === agentType
@@ -572,13 +579,13 @@ export default function AgentEditor({ agentType = 'inbound', title, description 
                       }`}
                     onClick={() => setFormData({ ...formData, voiceId: voice.id })}
                   >
-                    <div className="flex flex-col items-center text-center">
+                    <div className="flex flex-col items-center text-center h-28">
                       <Avatar className="w-12 h-12 mb-2">
                         <AvatarImage src={voice.avatar} alt={voice.name} />
                         <AvatarFallback>{voice.name?.[0] || 'V'}</AvatarFallback>
                       </Avatar>
-                      <span className="font-medium text-sm">{voice.name}</span>
-                      <span className="text-xs text-muted-foreground line-clamp-2 h-8">{voice.description?.slice(0, 50) || ''}{voice.description?.length > 50 ? '...' : ''}</span>
+                      <span className="font-medium text-sm line-clamp-1">{voice.name}</span>
+                      <span className="text-xs text-muted-foreground line-clamp-2">{voice.description?.slice(0, 60) || ''}{voice.description?.length > 60 ? '...' : ''}</span>
                     </div>
                     {formData.voiceId === voice.id && (
                       <div className="absolute top-2 right-2">

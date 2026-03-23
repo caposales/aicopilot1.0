@@ -1559,9 +1559,11 @@ if (route === '/voices' && method === 'GET') {
         })
       }
 
-      const baseUrl = request.headers.get('origin') || request.headers.get('host') || ''
-      const protocol = baseUrl.includes('localhost') ? 'http' : 'https'
-      const fullBaseUrl = baseUrl.startsWith('http') ? baseUrl : `${protocol}://${baseUrl}`
+      // Get the actual host where this API is running (not the embedding site)
+      const host = request.headers.get('host') || 'localhost:3000'
+      const isLocalhost = host.includes('localhost') || host.includes('127.0.0.1')
+      const protocol = isLocalhost ? 'http' : 'https'
+      const apiBaseUrl = `${protocol}://${host}`
 
       const widgetScript = `
 (function() {
@@ -1577,7 +1579,17 @@ if (route === '/voices' && method === 'GET') {
     placeholderText: chatbot.placeholderText
   })};
   
-  var baseUrl = "${fullBaseUrl}";
+  // API base URL - extracted from script src to ensure correct endpoint
+  var baseUrl = (function() {
+    var scripts = document.getElementsByTagName('script');
+    for (var i = 0; i < scripts.length; i++) {
+      var src = scripts[i].src || '';
+      if (src.includes('/api/chatbots/') && src.includes('/widget.js')) {
+        return src.split('/api/chatbots/')[0];
+      }
+    }
+    return "${apiBaseUrl}";
+  })();
   
   // Styles
   var styles = document.createElement('style');

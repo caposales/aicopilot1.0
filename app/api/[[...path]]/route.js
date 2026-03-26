@@ -1567,8 +1567,16 @@ if (route === '/voices' && method === 'GET') {
 
       const widgetScript = `
 (function() {
+  // Remove existing widget if config changed
+  var configHash = '${chatbot.updatedAt?.getTime() || Date.now()}';
+  if (window.__chatbotWidgetHash && window.__chatbotWidgetHash !== configHash) {
+    var existing = document.querySelector('.chatbot-widget-container');
+    if (existing) existing.remove();
+    window.__chatbotWidget = false;
+  }
   if (window.__chatbotWidget) return;
   window.__chatbotWidget = true;
+  window.__chatbotWidgetHash = configHash;
   
   var config = ${JSON.stringify({
     id: chatbot.id,
@@ -1843,7 +1851,10 @@ if (route === '/voices' && method === 'GET') {
       return new Response(widgetScript, {
         headers: { 
           'Content-Type': 'application/javascript',
-          'Access-Control-Allow-Origin': '*'
+          'Access-Control-Allow-Origin': '*',
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
+          'Expires': '0'
         }
       })
     }

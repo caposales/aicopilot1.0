@@ -189,17 +189,19 @@ async def realtime_conversation(websocket: WebSocket):
             
             response_task = None
             last_transcript_time = 0
-            interrupt_buffer = ""  # Collect speech during AI talking
-            processing_lock = False  # Prevent overlapping responses
+            interrupt_buffer = ""
+            processing_lock = False
+            pending_process = None  # Track the pending process timer
             
             async def process():
-                nonlocal transcript_buffer, last_transcript_time, interrupt_buffer, processing_lock
+                nonlocal transcript_buffer, last_transcript_time, interrupt_buffer, processing_lock, pending_process
                 
                 # Wait 1.5s for user to finish speaking
                 await asyncio.sleep(1.5)
                 
-                # If new speech came in, abort - a new process() will handle it
-                if time.time() - last_transcript_time < 1.3:
+                # If new speech came in during the wait, abort
+                if time.time() - last_transcript_time < 1.4:
+                    logger.info("Aborting process - user still speaking")
                     return
                 
                 # Prevent multiple simultaneous responses
@@ -212,6 +214,7 @@ async def realtime_conversation(websocket: WebSocket):
                 
                 processing_lock = True
                 transcript_buffer = ""
+                pending_process = None
                 
                 logger.info(f"Processing: {msg}")
                 
@@ -219,7 +222,7 @@ async def realtime_conversation(websocket: WebSocket):
                     await websocket.send_json({"type": "status", "status": "speaking"})
                     await respond(msg)
                     
-                    # After speaking, check if user interrupted with something meaningful
+                    # After speaking, check if user interrupted
                     if interrupt_buffer.strip() and len(interrupt_buffer.split()) >= 2:
                         logger.info(f"User interrupted with: {interrupt_buffer}")
                         transcript_buffer = interrupt_buffer
@@ -237,7 +240,7 @@ async def realtime_conversation(websocket: WebSocket):
                     processing_lock = False
             
             async def handle_dg():
-                nonlocal transcript_buffer, response_task, should_stop, last_transcript_time, interrupt_buffer
+                nonlocal transcript_buffer, response_task, should_stop, last_transcript_time, interrupt_buffer, pending_process
                 try:
                     async for msg in dg:
                         if should_stop: break
@@ -250,15 +253,15 @@ async def realtime_conversation(websocket: WebSocket):
                                 last_transcript_time = time.time()
                                 logger.info(f"Got: {t}")
                                 
-                                if is_speaking:
+                                if is_speaking or processing_lock:
                                     interrupt_buffer += " " + t
                                     logger.info(f"Interrupt collected: {t}")
                                 else:
                                     transcript_buffer += " " + t
-                                    # Reset the timer each time we get new speech
-                                    if response_task and not response_task.done(): 
-                                        response_task.cancel()
-                                    response_task = asyncio.create_task(process())
+                                    # Cancel any pending process and start fresh timer
+                                    if pending_process and not pending_process.done(): 
+                                        pending_process.cancel()
+                                    pending_process = asyncio.create_task(process())
                                 
                 except Exception as e:
                     logger.error(f"DG error: {e}")

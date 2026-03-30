@@ -260,7 +260,7 @@ export default function AgentDemoPage() {
   const playGreeting = async () => {
     const greeting = selectedAgent.initialMessage || "Hello! How can I help you?"
     conversationRef.current = [{ role: 'assistant', content: greeting }]
-    await speakFast(greeting)
+    await speakWithElevenLabs(greeting)
   }
 
   const startAudioStreaming = (stream, ws) => {
@@ -350,9 +350,9 @@ export default function AgentDemoPage() {
       const reply = data.reply
       conversationRef.current.push({ role: 'assistant', content: reply })
       
-      // Speak immediately
+      // Speak using ElevenLabs
       setStatus('speaking')
-      await speakFast(reply)
+      await speakWithElevenLabs(reply)
       
       setStatus('listening')
     } catch (e) {
@@ -363,8 +363,47 @@ export default function AgentDemoPage() {
     }
   }
 
-  // Fast browser TTS - no network latency
-  const speakFast = (text) => {
+  // Use ElevenLabs TTS for high-quality voice
+  const speakWithElevenLabs = async (text) => {
+    try {
+      const res = await fetch('/api/demo/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify({ agentId: selectedAgent.id, text })
+      })
+      
+      const data = await res.json()
+      
+      if (data.audioUrl) {
+        await playAudio(data.audioUrl)
+      } else {
+        // Fallback to browser TTS
+        await speakBrowser(text)
+      }
+    } catch (e) {
+      console.error('TTS error:', e)
+      await speakBrowser(text)
+    }
+  }
+
+  const playAudio = (url) => {
+    return new Promise((resolve) => {
+      const audio = new Audio(url)
+      currentAudioRef.current = audio
+      audio.onended = () => {
+        currentAudioRef.current = null
+        resolve()
+      }
+      audio.onerror = () => {
+        currentAudioRef.current = null
+        resolve()
+      }
+      audio.play().catch(() => resolve())
+    })
+  }
+
+  // Browser TTS fallback
+  const speakBrowser = (text) => {
     return new Promise((resolve) => {
       if (!('speechSynthesis' in window)) {
         resolve()

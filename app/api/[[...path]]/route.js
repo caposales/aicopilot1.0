@@ -2503,8 +2503,8 @@ if (route === '/voices' && method === 'GET') {
       let audioUrl = null
       
       // Use ElevenLabs pre-made voice if user hasn't set one
-      // Default pre-made voices: Rachel=21m00Tcm4TlvDq8ikWAM, Adam=pNInz6obpgDQGcFmaJgB
-      const voiceId = agent?.voiceId || '21m00Tcm4TlvDq8ikWAM' // Default to Rachel
+      // Default pre-made voices: Sarah=EXAVITQu4vr4xnSDxMaL, Roger=CwhRBWXzGAHq8TQ4Fs17
+      const voiceId = agent?.voiceId || 'EXAVITQu4vr4xnSDxMaL' // Default to Sarah
       
       if (integrations?.elevenlabs?.configured && integrations?.elevenlabs?.apiKey) {
         try {

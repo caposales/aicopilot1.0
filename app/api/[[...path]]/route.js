@@ -2290,10 +2290,10 @@ if (route === '/voices' && method === 'GET') {
       if (!user) return errorResponse('Unauthorized', 401)
       
       const body = await request.json()
-      const { agentId, message, conversation = [] } = body
+      const { agentId, message, conversation = [], isGreeting } = body
       
-      if (!agentId || !message) {
-        return errorResponse('Agent ID and message are required')
+      if (!agentId) {
+        return errorResponse('Agent ID is required')
       }
       
       // Get agent details
@@ -2310,6 +2310,56 @@ if (route === '/voices' && method === 'GET') {
       const FREE_DEMO_MINUTES = 2
       if (demoAccess.minutesUsed >= FREE_DEMO_MINUTES && !demoAccess.hasFullAccess) {
         return errorResponse('Demo limit reached. Upgrade for full access.', 403)
+      }
+
+      // Handle greeting - just generate TTS for the initial message
+      if (isGreeting || message === '__greeting__') {
+        const greetingText = agent.initialMessage || "Hello! How can I help you today?"
+        
+        // Generate TTS for greeting
+        let audioUrl = null
+        const integrations = await db.collection('integrations').findOne({ workspaceId: user.workspaceId })
+        
+        if (integrations?.elevenlabs?.configured && integrations?.elevenlabs?.apiKey && agent.voiceId) {
+          try {
+            const { decrypt } = await import('@/lib/encryption')
+            const elevenLabsKey = decrypt(integrations.elevenlabs.apiKey)
+            
+            const ttsResponse = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${agent.voiceId}`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'xi-api-key': elevenLabsKey
+              },
+              body: JSON.stringify({
+                text: greetingText,
+                model_id: 'eleven_monolingual_v1',
+                voice_settings: {
+                  stability: 0.5,
+                  similarity_boost: 0.75
+                }
+              })
+            })
+            
+            if (ttsResponse.ok) {
+              const audioBuffer = await ttsResponse.arrayBuffer()
+              const base64Audio = Buffer.from(audioBuffer).toString('base64')
+              audioUrl = `data:audio/mpeg;base64,${base64Audio}`
+            }
+          } catch (ttsError) {
+            console.error('TTS error for greeting:', ttsError)
+          }
+        }
+        
+        return jsonResponse({
+          reply: greetingText,
+          audioUrl,
+          minutesUsed: demoAccess.minutesUsed || 0
+        })
+      }
+
+      if (!message) {
+        return errorResponse('Message is required')
       }
       
       // Build conversation for AI

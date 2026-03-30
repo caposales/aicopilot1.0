@@ -65,11 +65,15 @@ export default function AgentDemoPage() {
   const recognitionRef = useRef(null)
   const callTimerRef = useRef(null)
   const conversationRef = useRef([])
-
-  // Keep conversation ref in sync
+  const isCallActiveRef = useRef(false)
+  // Keep refs in sync
   useEffect(() => {
     conversationRef.current = conversation
   }, [conversation])
+
+  useEffect(() => {
+    isCallActiveRef.current = isCallActive
+  }, [isCallActive])
 
   useEffect(() => {
     fetchAgents()
@@ -126,9 +130,10 @@ export default function AgentDemoPage() {
     }
 
     setIsCallActive(true)
+    isCallActiveRef.current = true
     setCallDuration(0)
     setConversation([])
-    setStatus('listening')
+    setStatus('speaking')
     
     // Start call timer
     callTimerRef.current = setInterval(() => {
@@ -146,18 +151,49 @@ export default function AgentDemoPage() {
     // Add greeting to conversation
     setConversation([{ role: 'assistant', content: greeting }])
     
-    // Speak the greeting
-    await speakText(greeting)
+    // Use ElevenLabs TTS via API for the greeting too
+    try {
+      const res = await fetch('/api/demo/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders()
+        },
+        body: JSON.stringify({
+          agentId: selectedAgent.id,
+          message: '__greeting__',
+          conversation: [],
+          isGreeting: true
+        })
+      })
+      
+      const data = await res.json()
+      if (data.audioUrl) {
+        await playAudio(data.audioUrl)
+      } else {
+        // Fallback to browser TTS
+        await speakText(greeting)
+      }
+    } catch (e) {
+      // Fallback to browser TTS
+      await speakText(greeting)
+    }
     
     // Start listening after greeting
-    startContinuousListening()
+    setTimeout(() => {
+      if (isCallActive) {
+        startContinuousListening()
+      }
+    }, 500)
   }
 
   const endLiveCall = () => {
     setIsCallActive(false)
+    isCallActiveRef.current = false
     setStatus('idle')
     setIsListening(false)
     setIsSpeaking(false)
+    setIsProcessing(false)
     
     if (callTimerRef.current) {
       clearInterval(callTimerRef.current)
@@ -165,12 +201,19 @@ export default function AgentDemoPage() {
     }
     
     if (recognitionRef.current) {
-      recognitionRef.current.abort()
+      try {
+        recognitionRef.current.abort()
+      } catch (e) {}
+      recognitionRef.current = null
     }
     
     if (audioRef.current) {
       audioRef.current.pause()
       audioRef.current = null
+    }
+
+    if ('speechSynthesis' in window) {
+      speechSynthesis.cancel()
     }
     
     toast.info(`Call ended - Duration: ${formatDuration(callDuration)}`)
@@ -178,58 +221,109 @@ export default function AgentDemoPage() {
 
   // Continuous listening with auto-restart
   const startContinuousListening = useCallback(() => {
-    if (!isCallActive) return
+    if (!isCallActiveRef.current) {
+      console.log('Call not active, not starting listener')
+      return
+    }
     
     if (!('webkitSpeechRecognition' in window || 'SpeechRecognition' in window)) {
       toast.error('Speech recognition not supported')
       return
     }
 
+    // Abort any existing recognition
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.abort()
+      } catch (e) {}
+    }
+
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
     recognitionRef.current = new SpeechRecognition()
-    recognitionRef.current.continuous = false
+    recognitionRef.current.continuous = true
     recognitionRef.current.interimResults = true
     recognitionRef.current.lang = 'en-US'
 
+    let finalTranscript = ''
+    let silenceTimer = null
+
     recognitionRef.current.onstart = () => {
+      console.log('Recognition started')
       setIsListening(true)
       setStatus('listening')
       setTranscript('')
+      finalTranscript = ''
     }
 
     recognitionRef.current.onresult = (event) => {
-      const current = event.resultIndex
-      const result = event.results[current]
-      const text = result[0].transcript
-      setTranscript(text)
+      let interim = ''
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const result = event.results[i]
+        if (result.isFinal) {
+          finalTranscript += result[0].transcript + ' '
+        } else {
+          interim += result[0].transcript
+        }
+      }
       
-      if (result.isFinal && text.trim()) {
-        handleUserMessage(text.trim())
+      setTranscript(finalTranscript + interim)
+      
+      // Reset silence timer on speech
+      if (silenceTimer) clearTimeout(silenceTimer)
+      
+      // If we have final transcript, wait for silence then send
+      if (finalTranscript.trim()) {
+        silenceTimer = setTimeout(() => {
+          if (finalTranscript.trim() && isCallActiveRef.current) {
+            const message = finalTranscript.trim()
+            finalTranscript = ''
+            recognitionRef.current?.abort()
+            handleUserMessage(message)
+          }
+        }, 1500) // 1.5 second silence = end of utterance
       }
     }
 
     recognitionRef.current.onerror = (event) => {
       console.log('Speech recognition error:', event.error)
-      if (event.error === 'no-speech' && isCallActive) {
-        // No speech detected, restart listening
-        setTimeout(() => startContinuousListening(), 100)
+      if (event.error === 'no-speech') {
+        // Restart on no speech
+        if (isCallActiveRef.current) {
+          setTimeout(() => startContinuousListening(), 500)
+        }
       } else if (event.error === 'not-allowed') {
-        toast.error('Microphone access denied')
+        toast.error('Microphone access denied. Please allow microphone access.')
         endLiveCall()
+      } else if (event.error === 'aborted') {
+        // Intentionally aborted, don't restart
+      } else {
+        // Other errors, try to restart
+        if (isCallActiveRef.current) {
+          setTimeout(() => startContinuousListening(), 1000)
+        }
       }
     }
 
     recognitionRef.current.onend = () => {
+      console.log('Recognition ended')
       setIsListening(false)
-      // Don't restart here - we'll restart after AI response
+      // Auto-restart if call still active and not processing
+      if (isCallActiveRef.current && !isProcessing) {
+        setTimeout(() => startContinuousListening(), 500)
+      }
     }
 
     try {
       recognitionRef.current.start()
+      console.log('Recognition start called')
     } catch (e) {
       console.log('Recognition start error:', e)
+      // Try again after delay
+      if (isCallActiveRef.current) {
+        setTimeout(() => startContinuousListening(), 1000)
+      }
     }
-  }, [isCallActive])
+  }, [isProcessing])
 
   const handleUserMessage = async (message) => {
     if (!message.trim() || isProcessing) return

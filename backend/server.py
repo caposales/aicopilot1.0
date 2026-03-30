@@ -137,7 +137,7 @@ async def realtime_conversation(websocket: WebSocket):
                         "POST",
                         "https://api.groq.com/openai/v1/chat/completions",
                         headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
-                        json={"model": "llama-3.3-70b-versatile", "messages": messages, "max_tokens": 50, "stream": True},
+                        json={"model": "llama-3.1-8b-instant", "messages": messages, "max_tokens": 50, "stream": True},
                         timeout=30.0
                     ) as resp:
                         buf = ""

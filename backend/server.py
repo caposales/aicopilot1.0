@@ -189,30 +189,29 @@ async def realtime_conversation(websocket: WebSocket):
             
             response_task = None
             last_transcript_time = 0
-            min_words = 4  # Require at least 4 words to respond
+            processing_lock = asyncio.Lock()
             
             async def process():
                 nonlocal transcript_buffer, last_transcript_time
-                # Wait for true silence
-                await asyncio.sleep(1.0)  # 1 second of silence
                 
-                # Check if we got new transcripts during the wait
-                if time.time() - last_transcript_time < 0.9:
-                    return  # Still getting transcripts, don't respond yet
+                # Wait for silence
+                await asyncio.sleep(0.5)  # 500ms
                 
-                msg = transcript_buffer.strip()
-                word_count = len(msg.split())
-                
-                # Require minimum words to filter out noise
-                if word_count < min_words:
-                    logger.info(f"Ignoring short input ({word_count} words): {msg}")
-                    transcript_buffer = ""
+                # Double-check we're not still receiving speech
+                if time.time() - last_transcript_time < 0.4:
                     return
                 
-                transcript_buffer = ""
-                
-                if not is_speaking and not should_stop:
-                    logger.info(f"Processing ({word_count} words): {msg}")
+                async with processing_lock:
+                    msg = transcript_buffer.strip()
+                    transcript_buffer = ""  # Clear immediately
+                    
+                    if not msg or len(msg.split()) < 3:
+                        return
+                    
+                    if is_speaking or should_stop:
+                        return
+                    
+                    logger.info(f"Processing: {msg}")
                     try:
                         await websocket.send_json({"type": "status", "status": "speaking"})
                         await respond(msg)
@@ -227,7 +226,7 @@ async def realtime_conversation(websocket: WebSocket):
                     async for msg in dg:
                         if should_stop: break
                         
-                        # Ignore ALL input while speaking or in cooldown
+                        # Ignore while speaking or cooldown
                         if is_speaking or time.time() < speaking_cooldown:
                             continue
                         
@@ -239,10 +238,18 @@ async def realtime_conversation(websocket: WebSocket):
                                 last_transcript_time = time.time()
                                 logger.info(f"Got: {t}")
                                 
-                                # Cancel previous timer, start new one
+                                # Cancel any pending response
                                 if response_task and not response_task.done(): 
                                     response_task.cancel()
-                                response_task = asyncio.create_task(process())
+                                
+                                # Check if sentence is complete (ends with punctuation)
+                                stripped = transcript_buffer.strip()
+                                if stripped and stripped[-1] in '.?!':
+                                    # Respond immediately - sentence is complete
+                                    response_task = asyncio.create_task(process())
+                                else:
+                                    # Wait for more input
+                                    response_task = asyncio.create_task(process())
                 except Exception as e:
                     logger.error(f"DG error: {e}")
             

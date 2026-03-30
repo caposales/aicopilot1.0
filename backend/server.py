@@ -273,8 +273,10 @@ async def realtime_conversation(websocket: WebSocket):
                         msg = await websocket.receive()
                         if msg["type"] == "websocket.receive":
                             if "bytes" in msg:
-                                # Always send audio to Deepgram for interrupt detection
-                                await dg.send(msg["bytes"])
+                                # Only send audio to Deepgram when AI is NOT speaking
+                                # This prevents echo (AI's voice triggering interrupts)
+                                if not is_speaking and not processing_lock:
+                                    await dg.send(msg["bytes"])
                             elif "text" in msg:
                                 d = json.loads(msg["text"])
                                 if d.get("type") == "stop":

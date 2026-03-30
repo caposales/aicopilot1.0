@@ -175,7 +175,7 @@ async def realtime_conversation(websocket: WebSocket):
     
     try:
         async with websockets.connect(
-            "wss://api.deepgram.com/v1/listen?encoding=linear16&sample_rate=16000&channels=1&punctuate=true&interim_results=false&utterance_end_ms=1500&vad_events=true",
+            "wss://api.deepgram.com/v1/listen?punctuate=true&utterance_end_ms=1500&vad_events=true",
             additional_headers={"Authorization": f"Token {deepgram_key}"}
         ) as dg:
             logger.info("Connected to Deepgram")

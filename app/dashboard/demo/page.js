@@ -28,22 +28,55 @@ export default function AgentDemoPage() {
   }, [])
 
   const cleanup = useCallback(() => {
-    if (callTimerRef.current) clearInterval(callTimerRef.current)
+    // Stop timer
+    if (callTimerRef.current) {
+      clearInterval(callTimerRef.current)
+      callTimerRef.current = null
+    }
+    
+    // Close WebSocket
     if (wsRef.current) {
       try { 
-        wsRef.current.send(JSON.stringify({ type: 'stop' }))
-        wsRef.current.close() 
-      } catch(e) {}
+        if (wsRef.current.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ type: 'stop' }))
+        }
+        wsRef.current.close(1000, 'User ended call')
+      } catch(e) {
+        console.log('WS close error:', e)
+      }
+      wsRef.current = null
     }
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      try { mediaRecorderRef.current.stop() } catch(e) {}
+    
+    // Stop media recorder
+    if (mediaRecorderRef.current) {
+      try {
+        if (mediaRecorderRef.current.state !== 'inactive') {
+          mediaRecorderRef.current.stop()
+        }
+      } catch(e) {
+        console.log('MediaRecorder stop error:', e)
+      }
+      mediaRecorderRef.current = null
     }
+    
+    // Stop microphone stream
     if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop())
+      streamRef.current.getTracks().forEach(track => {
+        track.stop()
+      })
+      streamRef.current = null
     }
+    
+    // Close audio context
     if (audioContextRef.current) {
-      audioContextRef.current.close().catch(() => {})
+      try {
+        audioContextRef.current.close()
+      } catch(e) {
+        console.log('AudioContext close error:', e)
+      }
+      audioContextRef.current = null
     }
+    
     nextPlayTimeRef.current = 0
   }, [])
 
@@ -206,9 +239,12 @@ export default function AgentDemoPage() {
   }
 
   const endCall = () => {
+    console.log('Ending call...')
     cleanup()
     setIsCallActive(false)
     setStatus('idle')
+    setCallDuration(0)
+    toast.info('Call ended')
   }
 
   const formatDuration = (s) => `${Math.floor(s/60)}:${(s%60).toString().padStart(2,'0')}`
@@ -257,13 +293,19 @@ export default function AgentDemoPage() {
             onClick={startCall}
             disabled={!selectedAgent}
             className="w-36 h-36 rounded-full bg-green-500 hover:bg-green-400 shadow-lg shadow-green-500/30 hover:shadow-green-400/50 transition-all flex items-center justify-center disabled:opacity-50"
+            data-testid="start-call-btn"
           >
             <Phone className="w-14 h-14 text-white" />
           </button>
         ) : (
           <button
-            onClick={endCall}
-            className="w-36 h-36 rounded-full bg-red-500 hover:bg-red-400 shadow-lg shadow-red-500/30 transition-all flex items-center justify-center"
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              endCall()
+            }}
+            className="w-36 h-36 rounded-full bg-red-500 hover:bg-red-400 shadow-lg shadow-red-500/30 transition-all flex items-center justify-center cursor-pointer z-50"
+            data-testid="end-call-btn"
           >
             <PhoneOff className="w-14 h-14 text-white" />
           </button>

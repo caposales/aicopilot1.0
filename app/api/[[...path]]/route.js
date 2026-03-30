@@ -2464,51 +2464,28 @@ if (route === '/voices' && method === 'GET') {
     if (route === '/demo/deepgram-token' && method === 'POST') {
       if (!user) return errorResponse('Unauthorized', 401)
       
-      const deepgramApiKey = process.env.DEEPGRAM_API_KEY
+      // First try user's stored Deepgram key, fallback to env
+      let deepgramApiKey = process.env.DEEPGRAM_API_KEY
+      
+      const integrations = await db.collection('integrations').findOne({ workspaceId: user.workspaceId })
+      if (integrations?.deepgram?.configured && integrations?.deepgram?.apiKey) {
+        try {
+          const { decrypt } = await import('@/lib/encryption')
+          deepgramApiKey = decrypt(integrations.deepgram.apiKey)
+        } catch (e) {
+          console.error('Failed to decrypt Deepgram key:', e)
+        }
+      }
       
       if (!deepgramApiKey) {
-        return errorResponse('Deepgram API key not configured', 500)
+        return errorResponse('Deepgram API key not configured. Add it in Integrations.', 500)
       }
       
-      try {
-        // Generate temporary token from Deepgram using the grant endpoint
-        const response = await fetch('https://api.deepgram.com/v1/auth/grant', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Token ${deepgramApiKey}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            // Token valid for 600 seconds (10 minutes) for longer conversations
-            ttl_seconds: 600
-          })
-        })
-        
-        if (!response.ok) {
-          const errorText = await response.text()
-          console.error('Deepgram token error:', response.status, errorText)
-          // Fallback: return the API key directly (works but less secure)
-          return jsonResponse({ 
-            token: deepgramApiKey,
-            expiresAt: Date.now() + 600000
-          })
-        }
-        
-        const data = await response.json()
-        
-        return jsonResponse({ 
-          token: data.access_token || deepgramApiKey,
-          expiresAt: Date.now() + (data.expires_in || 600) * 1000
-        })
-        
-      } catch (e) {
-        console.error('Deepgram token generation error:', e)
-        // Fallback: return the API key directly
-        return jsonResponse({ 
-          token: deepgramApiKey,
-          expiresAt: Date.now() + 600000
-        })
-      }
+      // Return the API key directly - it works for WebSocket auth
+      return jsonResponse({ 
+        token: deepgramApiKey,
+        expiresAt: Date.now() + 600000
+      })
     }
 
     // Dedicated TTS endpoint for faster audio generation
@@ -2525,12 +2502,18 @@ if (route === '/voices' && method === 'GET') {
       
       let audioUrl = null
       
-      if (integrations?.elevenlabs?.configured && integrations?.elevenlabs?.apiKey && agent?.voiceId) {
+      // Use ElevenLabs pre-made voice if user hasn't set one
+      // Default pre-made voices: Rachel=21m00Tcm4TlvDq8ikWAM, Adam=pNInz6obpgDQGcFmaJgB
+      const voiceId = agent?.voiceId || '21m00Tcm4TlvDq8ikWAM' // Default to Rachel
+      
+      if (integrations?.elevenlabs?.configured && integrations?.elevenlabs?.apiKey) {
         try {
           const { decrypt } = await import('@/lib/encryption')
           const elevenLabsKey = decrypt(integrations.elevenlabs.apiKey)
           
-          const ttsResponse = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${agent.voiceId}`, {
+          console.log('Using ElevenLabs voice:', voiceId)
+          
+          const ttsResponse = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -2550,6 +2533,9 @@ if (route === '/voices' && method === 'GET') {
             const audioBuffer = await ttsResponse.arrayBuffer()
             const base64Audio = Buffer.from(audioBuffer).toString('base64')
             audioUrl = `data:audio/mpeg;base64,${base64Audio}`
+          } else {
+            const errText = await ttsResponse.text()
+            console.error('ElevenLabs TTS error:', ttsResponse.status, errText)
           }
         } catch (e) {
           console.error('TTS error:', e)

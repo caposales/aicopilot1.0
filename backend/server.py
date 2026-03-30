@@ -121,13 +121,17 @@ async def realtime_conversation(websocket: WebSocket):
                 async def forward():
                     try:
                         async for msg in tts:
-                            if should_stop: break
+                            if should_stop: 
+                                logger.info("Forward stopped - should_stop is True")
+                                break
                             try:
                                 d = json.loads(msg)
                                 if d.get("audio"):
                                     await websocket.send_json({"type": "audio", "data": d["audio"]})
-                            except: pass
-                    except: pass
+                            except Exception as e: 
+                                logger.error(f"Audio forward error: {e}")
+                    except Exception as e: 
+                        logger.error(f"Forward task error: {e}")
                 
                 audio_task = asyncio.create_task(forward())
                 

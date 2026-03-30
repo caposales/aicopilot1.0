@@ -14,10 +14,7 @@ import base64
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-# Create the main app
 app = FastAPI()
-
-# Next.js app URL (running on port 3000) - configurable via env
 NEXTJS_URL = os.environ.get('NEXTJS_URL', 'http://localhost:3000')
 
 app.add_middleware(
@@ -28,17 +25,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Health check endpoint
 @app.get("/")
 async def health_check():
-    return {"status": "ok", "service": "backend-proxy"}
+    return {"status": "ok"}
 
 @app.get("/health")
 async def health():
@@ -47,20 +39,12 @@ async def health():
 
 # =============================================================================
 # ULTRA LOW LATENCY REAL-TIME CONVERSATION
-# Deepgram STT -> OpenAI Streaming -> ElevenLabs WebSocket TTS (PCM)
 # =============================================================================
 
 @app.websocket("/api/ws/realtime")
 async def realtime_conversation(websocket: WebSocket):
-    """
-    Ultra low-latency streaming conversation:
-    - Deepgram for instant STT
-    - OpenAI streaming for word-by-word response
-    - ElevenLabs WebSocket for PCM audio streaming
-    """
     await websocket.accept()
     
-    # Get API keys
     deepgram_key = os.environ.get('DEEPGRAM_API_KEY')
     elevenlabs_key = os.environ.get('ELEVENLABS_API_KEY')
     llm_key = os.environ.get('EMERGENT_LLM_KEY')
@@ -70,237 +54,201 @@ async def realtime_conversation(websocket: WebSocket):
         await websocket.close()
         return
     
-    # Get config from client
+    # Get config
     try:
         config_msg = await asyncio.wait_for(websocket.receive_json(), timeout=5)
         voice_id = config_msg.get('voiceId', 'EXAVITQu4vr4xnSDxMaL')
-        system_prompt = config_msg.get('systemPrompt', 'You are a helpful assistant. Be very concise - respond in 1-2 short sentences max.')
-        initial_message = config_msg.get('initialMessage', 'Hello! How can I help you?')
+        system_prompt = config_msg.get('systemPrompt', 'You are helpful. Reply in 1 short sentence.')
+        initial_message = config_msg.get('initialMessage', 'Hello!')
     except:
         voice_id = 'EXAVITQu4vr4xnSDxMaL'
-        system_prompt = 'You are a helpful assistant. Be very concise.'
-        initial_message = 'Hello! How can I help you?'
+        system_prompt = 'You are helpful. Reply in 1 short sentence.'
+        initial_message = 'Hello!'
     
-    conversation_history = []
-    is_speaking = False
-    should_stop = False
-    transcript_buffer = ""
+    # State - use a lock to prevent race conditions
+    state = {
+        'is_speaking': False,
+        'should_stop': False,
+        'transcript_buffer': '',
+        'conversation': [],
+        'pending_response': None
+    }
+    state_lock = asyncio.Lock()
     
-    async def stream_tts_websocket(text: str):
-        """Stream TTS using ElevenLabs WebSocket API with PCM output"""
-        nonlocal is_speaking
-        is_speaking = True
+    async def stream_tts(text: str):
+        """Stream TTS - blocks until complete"""
+        async with state_lock:
+            state['is_speaking'] = True
         
         try:
             uri = f"wss://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream-input?model_id=eleven_turbo_v2"
             
             async with websockets.connect(uri) as tts_ws:
-                # Send BOS (beginning of stream) with PCM format
-                bos = {
+                # BOS
+                await tts_ws.send(json.dumps({
                     "text": " ",
                     "output_format": "pcm_24000",
-                    "voice_settings": {"stability": 0.5, "similarity_boost": 0.75},
+                    "voice_settings": {"stability": 0.5, "similarity_boost": 0.8},
                     "xi_api_key": elevenlabs_key
-                }
-                await tts_ws.send(json.dumps(bos))
-                
-                # Send the text
-                await tts_ws.send(json.dumps({
-                    "text": text + " ",
-                    "try_trigger_generation": True
                 }))
                 
-                # Send EOS
-                await tts_ws.send(json.dumps({"text": ""}))
+                # Send text
+                await tts_ws.send(json.dumps({"text": text + " ", "try_trigger_generation": True}))
+                await tts_ws.send(json.dumps({"text": ""}))  # EOS
                 
-                # Receive and forward PCM audio chunks
+                # Stream audio to client
                 async for msg in tts_ws:
-                    if should_stop:
+                    if state['should_stop']:
                         break
                     try:
                         data = json.loads(msg)
-                        if "audio" in data and data["audio"]:
-                            # Forward PCM audio directly to client
-                            await websocket.send_json({
-                                "type": "audio",
-                                "data": data["audio"],  # Already base64
-                                "format": "pcm_24000"
-                            })
+                        if data.get("audio"):
+                            await websocket.send_json({"type": "audio", "data": data["audio"]})
                         if data.get("isFinal"):
                             break
-                    except json.JSONDecodeError:
+                    except:
                         pass
                 
                 await websocket.send_json({"type": "audio_end"})
-                
         except Exception as e:
-            logger.error(f"TTS WebSocket error: {e}")
+            logger.error(f"TTS error: {e}")
         finally:
-            is_speaking = False
+            async with state_lock:
+                state['is_speaking'] = False
     
-    async def stream_llm_to_tts(user_message: str):
-        """Stream LLM response directly to TTS word by word"""
-        nonlocal conversation_history, is_speaking
-        is_speaking = True
-        
-        conversation_history.append({"role": "user", "content": user_message})
+    async def stream_llm_tts(user_message: str):
+        """Stream LLM -> TTS with word-by-word streaming"""
+        async with state_lock:
+            state['is_speaking'] = True
+            state['conversation'].append({"role": "user", "content": user_message})
         
         messages = [{"role": "system", "content": system_prompt}]
-        messages.extend(conversation_history[-4:])
+        messages.extend(state['conversation'][-4:])
         
         full_response = ""
         
         try:
-            # Connect to ElevenLabs WebSocket for streaming TTS
             uri = f"wss://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream-input?model_id=eleven_turbo_v2"
             
             async with websockets.connect(uri) as tts_ws:
-                # Send BOS
-                bos = {
+                # BOS
+                await tts_ws.send(json.dumps({
                     "text": " ",
-                    "output_format": "pcm_24000",
-                    "voice_settings": {"stability": 0.5, "similarity_boost": 0.75},
+                    "output_format": "pcm_24000", 
+                    "voice_settings": {"stability": 0.5, "similarity_boost": 0.8},
                     "xi_api_key": elevenlabs_key
-                }
-                await tts_ws.send(json.dumps(bos))
+                }))
                 
-                # Task to receive audio and forward to client
+                # Task to forward audio
                 async def forward_audio():
                     try:
                         async for msg in tts_ws:
-                            if should_stop:
+                            if state['should_stop']:
                                 break
                             try:
                                 data = json.loads(msg)
-                                if "audio" in data and data["audio"]:
-                                    await websocket.send_json({
-                                        "type": "audio",
-                                        "data": data["audio"],
-                                        "format": "pcm_24000"
-                                    })
+                                if data.get("audio"):
+                                    await websocket.send_json({"type": "audio", "data": data["audio"]})
                             except:
                                 pass
-                    except Exception as e:
-                        logger.error(f"Audio forward error: {e}")
+                    except:
+                        pass
                 
-                # Start audio forwarding task
                 audio_task = asyncio.create_task(forward_audio())
                 
-                # Stream from LLM and send text to TTS
+                # Stream LLM
                 async with httpx.AsyncClient() as client:
                     async with client.stream(
                         "POST",
                         "https://integrations.emergentagent.com/llm/chat/completions",
-                        headers={
-                            "Authorization": f"Bearer {llm_key}",
-                            "Content-Type": "application/json"
-                        },
-                        json={
-                            "model": "gpt-5.2",
-                            "messages": messages,
-                            "max_tokens": 100,
-                            "stream": True
-                        },
+                        headers={"Authorization": f"Bearer {llm_key}", "Content-Type": "application/json"},
+                        json={"model": "gpt-5.2", "messages": messages, "max_tokens": 80, "stream": True},
                         timeout=30.0
                     ) as response:
-                        word_buffer = ""
-                        
+                        buffer = ""
                         async for line in response.aiter_lines():
-                            if should_stop:
+                            if state['should_stop']:
                                 break
-                            if line.startswith("data: "):
-                                data = line[6:]
-                                if data == "[DONE]":
-                                    break
+                            if line.startswith("data: ") and line[6:] != "[DONE]":
                                 try:
-                                    chunk = json.loads(data)
+                                    chunk = json.loads(line[6:])
                                     content = chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
                                     if content:
                                         full_response += content
-                                        word_buffer += content
-                                        
-                                        # Send to TTS every few words or on punctuation
-                                        if ' ' in word_buffer or any(p in word_buffer for p in '.!?,'):
-                                            await tts_ws.send(json.dumps({
-                                                "text": word_buffer,
-                                                "try_trigger_generation": True
-                                            }))
-                                            word_buffer = ""
+                                        buffer += content
+                                        # Send every word or punctuation
+                                        if ' ' in buffer or any(p in buffer for p in '.!?,;:'):
+                                            await tts_ws.send(json.dumps({"text": buffer, "try_trigger_generation": True}))
+                                            buffer = ""
                                 except:
                                     pass
                         
-                        # Send remaining text
-                        if word_buffer:
-                            await tts_ws.send(json.dumps({
-                                "text": word_buffer,
-                                "try_trigger_generation": True
-                            }))
+                        if buffer:
+                            await tts_ws.send(json.dumps({"text": buffer, "try_trigger_generation": True}))
                 
-                # Send EOS to TTS
+                # EOS
                 await tts_ws.send(json.dumps({"text": ""}))
-                
-                # Wait for audio to finish
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.3)
                 audio_task.cancel()
                 
                 await websocket.send_json({"type": "audio_end"})
         
         except Exception as e:
-            logger.error(f"LLM->TTS streaming error: {e}")
+            logger.error(f"LLM->TTS error: {e}")
         
-        conversation_history.append({"role": "assistant", "content": full_response})
-        is_speaking = False
+        async with state_lock:
+            state['conversation'].append({"role": "assistant", "content": full_response})
+            state['is_speaking'] = False
     
     # Connect to Deepgram
-    deepgram_url = "wss://api.deepgram.com/v1/listen"
-    
     try:
         async with websockets.connect(
-            deepgram_url,
+            "wss://api.deepgram.com/v1/listen",
             additional_headers={"Authorization": f"Token {deepgram_key}"}
         ) as deepgram_ws:
-            logger.info("Connected to Deepgram")
             await websocket.send_json({"type": "connected"})
             
-            # Play initial greeting
+            # Initial greeting
             await websocket.send_json({"type": "status", "status": "speaking"})
-            await stream_tts_websocket(initial_message)
-            conversation_history.append({"role": "assistant", "content": initial_message})
+            await stream_tts(initial_message)
+            state['conversation'].append({"role": "assistant", "content": initial_message})
             await websocket.send_json({"type": "status", "status": "listening"})
             
             async def handle_deepgram():
-                """Handle transcription - respond FAST, ignore noise"""
-                nonlocal transcript_buffer, should_stop
+                """Process transcriptions - ignore while speaking"""
+                response_task = None
                 
-                silence_task = None
-                
-                async def respond_now():
-                    """Respond immediately if we have real speech"""
-                    nonlocal transcript_buffer
-                    await asyncio.sleep(0.15)  # 150ms - faster
+                async def trigger_response():
+                    """Trigger AI response after brief silence"""
+                    await asyncio.sleep(0.1)  # 100ms - super fast
                     
-                    message = transcript_buffer.strip()
+                    async with state_lock:
+                        if state['is_speaking']:
+                            return
+                        
+                        message = state['transcript_buffer'].strip()
+                        state['transcript_buffer'] = ''
+                        
+                        # Ignore short noise
+                        if len(message) < 5 or len(message.split()) < 2:
+                            return
                     
-                    # Ignore very short utterances (likely noise/coughs)
-                    # Must be at least 2 words or 8 characters
-                    word_count = len(message.split())
-                    if word_count < 2 and len(message) < 8:
-                        logger.info(f"Ignoring short utterance: '{message}'")
-                        transcript_buffer = ""
-                        return
+                    await websocket.send_json({"type": "status", "status": "speaking"})
+                    await stream_llm_tts(message)
                     
-                    if message and not is_speaking:
-                        transcript_buffer = ""
-                        await websocket.send_json({"type": "status", "status": "speaking"})
-                        await stream_llm_to_tts(message)
+                    if not state['should_stop']:
                         await websocket.send_json({"type": "status", "status": "listening"})
                 
                 try:
-                    async for message in deepgram_ws:
-                        if should_stop:
+                    async for msg in deepgram_ws:
+                        if state['should_stop']:
                             break
                         
-                        data = json.loads(message)
+                        # Skip all transcription while speaking
+                        if state['is_speaking']:
+                            continue
+                        
+                        data = json.loads(msg)
                         
                         if data.get("type") == "Results":
                             alt = data.get("channel", {}).get("alternatives", [{}])[0]
@@ -308,54 +256,51 @@ async def realtime_conversation(websocket: WebSocket):
                             is_final = data.get("is_final", False)
                             speech_final = data.get("speech_final", False)
                             
-                            # Only process if we have actual words
-                            if transcript and is_final and len(transcript.strip()) > 0:
-                                transcript_buffer += " " + transcript
+                            if transcript and is_final:
+                                async with state_lock:
+                                    state['transcript_buffer'] += " " + transcript
                                 
-                                if silence_task:
-                                    silence_task.cancel()
-                                silence_task = asyncio.create_task(respond_now())
+                                if response_task:
+                                    response_task.cancel()
+                                response_task = asyncio.create_task(trigger_response())
                             
-                            if speech_final and transcript_buffer.strip():
-                                if silence_task:
-                                    silence_task.cancel()
-                                silence_task = asyncio.create_task(respond_now())
+                            if speech_final:
+                                if response_task:
+                                    response_task.cancel()
+                                response_task = asyncio.create_task(trigger_response())
                         
                         elif data.get("type") == "UtteranceEnd":
-                            if transcript_buffer.strip() and not is_speaking:
-                                if silence_task:
-                                    silence_task.cancel()
-                                silence_task = asyncio.create_task(respond_now())
-                                
+                            if state['transcript_buffer'].strip():
+                                if response_task:
+                                    response_task.cancel()
+                                response_task = asyncio.create_task(trigger_response())
+                
                 except Exception as e:
-                    logger.error(f"Deepgram handler error: {e}")
+                    logger.error(f"Deepgram error: {e}")
             
             async def handle_client():
-                """Handle audio from client"""
-                nonlocal should_stop
+                """Forward client audio to Deepgram"""
                 try:
-                    while not should_stop:
+                    while not state['should_stop']:
                         msg = await websocket.receive()
                         if msg["type"] == "websocket.receive":
-                            if "bytes" in msg and not is_speaking:
-                                await deepgram_ws.send(msg["bytes"])
+                            if "bytes" in msg:
+                                # Only send audio when NOT speaking
+                                if not state['is_speaking']:
+                                    await deepgram_ws.send(msg["bytes"])
                             elif "text" in msg:
                                 data = json.loads(msg["text"])
                                 if data.get("type") == "stop":
-                                    should_stop = True
+                                    state['should_stop'] = True
                                     break
                 except WebSocketDisconnect:
                     pass
-                except Exception as e:
-                    logger.error(f"Client handler error: {e}")
+                except:
+                    pass
                 finally:
-                    should_stop = True
+                    state['should_stop'] = True
             
-            await asyncio.gather(
-                handle_deepgram(),
-                handle_client(),
-                return_exceptions=True
-            )
+            await asyncio.gather(handle_deepgram(), handle_client(), return_exceptions=True)
     
     except Exception as e:
         logger.error(f"Realtime error: {e}")
@@ -366,96 +311,58 @@ async def realtime_conversation(websocket: WebSocket):
             pass
 
 
-# Simple Deepgram proxy (kept for backwards compatibility)
+# Deepgram proxy (backwards compat)
 @app.websocket("/api/ws/deepgram")
-async def deepgram_websocket_proxy(websocket: WebSocket):
-    """Proxy WebSocket connection to Deepgram for real-time STT"""
+async def deepgram_proxy(websocket: WebSocket):
     await websocket.accept()
     
-    # Get Deepgram API key from environment
     deepgram_key = os.environ.get('DEEPGRAM_API_KEY')
-    logger.info(f"Deepgram key loaded: {deepgram_key[:10] if deepgram_key else 'NONE'}...")
-    
     if not deepgram_key:
-        await websocket.send_json({"error": "Deepgram API key not configured"})
+        await websocket.send_json({"error": "No Deepgram key"})
         await websocket.close()
         return
     
-    # Build Deepgram WebSocket URL - use simpler URL, params can cause issues
-    deepgram_url = "wss://api.deepgram.com/v1/listen"
-    
     try:
-        # Connect to Deepgram using Authorization header
-        headers = {"Authorization": f"Token {deepgram_key}"}
-        logger.info(f"Connecting to Deepgram with headers: {list(headers.keys())}")
-        
         async with websockets.connect(
-            deepgram_url,
-            additional_headers=headers
-        ) as deepgram_ws:
-            logger.info("Connected to Deepgram WebSocket successfully!")
-            
-            # Send confirmation to client
+            "wss://api.deepgram.com/v1/listen",
+            additional_headers={"Authorization": f"Token {deepgram_key}"}
+        ) as dg:
             await websocket.send_json({"type": "connected"})
             
-            async def forward_to_deepgram():
-                """Forward audio from client to Deepgram"""
+            async def to_dg():
                 try:
                     while True:
                         data = await websocket.receive_bytes()
-                        await deepgram_ws.send(data)
-                except WebSocketDisconnect:
-                    logger.info("Client disconnected")
-                except Exception as e:
-                    logger.error(f"Forward to Deepgram error: {e}")
+                        await dg.send(data)
+                except:
+                    pass
             
-            async def forward_to_client():
-                """Forward transcription from Deepgram to client"""
+            async def from_dg():
                 try:
-                    async for message in deepgram_ws:
-                        await websocket.send_text(message)
-                except Exception as e:
-                    logger.error(f"Forward to client error: {e}")
+                    async for msg in dg:
+                        await websocket.send_text(msg)
+                except:
+                    pass
             
-            # Run both forwarding tasks concurrently
-            await asyncio.gather(
-                forward_to_deepgram(),
-                forward_to_client(),
-                return_exceptions=True
-            )
-            
+            await asyncio.gather(to_dg(), from_dg(), return_exceptions=True)
     except Exception as e:
-        logger.error(f"Deepgram WebSocket error: {type(e).__name__}: {e}")
-        try:
-            await websocket.send_json({"error": str(e)})
-        except:
-            pass
+        logger.error(f"Deepgram proxy error: {e}")
     finally:
         try:
             await websocket.close()
         except:
             pass
 
-# Proxy all /api requests to Next.js with retry logic
+
+# Proxy to Next.js
 @app.api_route("/api/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
 async def proxy_to_nextjs(request: Request, path: str):
-    """Proxy all API requests to the Next.js server with retry logic"""
-    
-    # Build the target URL
     target_url = f"{NEXTJS_URL}/api/{path}"
-    
-    # Get request body if present
     body = await request.body()
-    
-    # Forward headers (excluding host)
     headers = dict(request.headers)
     headers.pop('host', None)
     
-    # Retry logic for when Next.js is still starting
-    max_retries = 3
-    retry_delay = 2  # seconds
-    
-    for attempt in range(max_retries):
+    for attempt in range(3):
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.request(
@@ -466,31 +373,13 @@ async def proxy_to_nextjs(request: Request, path: str):
                     params=dict(request.query_params),
                     timeout=30.0
                 )
-                
-                # Return the response from Next.js
-                return Response(
-                    content=response.content,
-                    status_code=response.status_code,
-                    headers=dict(response.headers)
-                )
-        except httpx.ConnectError as e:
-            if attempt < max_retries - 1:
-                logger.warning(f"Next.js not ready, retry {attempt + 1}/{max_retries} in {retry_delay}s...")
-                await asyncio.sleep(retry_delay)
+                return Response(content=response.content, status_code=response.status_code, headers=dict(response.headers))
+        except httpx.ConnectError:
+            if attempt < 2:
+                await asyncio.sleep(2)
             else:
-                logger.error(f"Proxy error after {max_retries} retries: {e}")
-                return JSONResponse(
-                    status_code=503,
-                    content={"error": "Service temporarily unavailable", "detail": "Next.js server is starting up, please retry in a few seconds"}
-                )
+                return JSONResponse(status_code=503, content={"error": "Service unavailable"})
         except Exception as e:
-            logger.error(f"Proxy error: {e}")
-            return JSONResponse(
-                status_code=502,
-                content={"error": "Proxy error", "detail": str(e)}
-            )
+            return JSONResponse(status_code=502, content={"error": str(e)})
     
-    return JSONResponse(
-        status_code=503,
-        content={"error": "Service unavailable"}
-    )
+    return JSONResponse(status_code=503, content={"error": "Service unavailable"})

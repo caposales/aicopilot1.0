@@ -190,20 +190,28 @@ async def realtime_conversation(websocket: WebSocket):
             response_task = None
             last_transcript_time = 0
             interrupt_buffer = ""  # Collect speech during AI talking
+            processing_lock = False  # Prevent overlapping responses
             
             async def process():
-                nonlocal transcript_buffer, last_transcript_time, interrupt_buffer
+                nonlocal transcript_buffer, last_transcript_time, interrupt_buffer, processing_lock
                 
-                await asyncio.sleep(0.6)  # Wait for user to finish speaking
+                # Wait for silence (user finished speaking)
+                await asyncio.sleep(1.2)
                 
-                if time.time() - last_transcript_time < 0.5:
-                    return  # User still speaking
+                # Check if user is still speaking
+                if time.time() - last_transcript_time < 1.0:
+                    return  # User still speaking, will be called again
+                
+                # Prevent multiple simultaneous responses
+                if processing_lock or is_speaking:
+                    return
                 
                 msg = transcript_buffer.strip()
-                transcript_buffer = ""
-                
-                if not msg or len(msg.split()) < 2 or should_stop or is_speaking:
+                if not msg or len(msg.split()) < 2 or should_stop:
                     return
+                
+                processing_lock = True
+                transcript_buffer = ""
                 
                 logger.info(f"Processing: {msg}")
                 
@@ -216,7 +224,8 @@ async def realtime_conversation(websocket: WebSocket):
                         logger.info(f"User interrupted with: {interrupt_buffer}")
                         transcript_buffer = interrupt_buffer
                         interrupt_buffer = ""
-                        await asyncio.sleep(0.3)
+                        processing_lock = False
+                        await asyncio.sleep(0.5)
                         await process()
                     else:
                         interrupt_buffer = ""
@@ -224,9 +233,11 @@ async def realtime_conversation(websocket: WebSocket):
                             await websocket.send_json({"type": "status", "status": "listening"})
                 except Exception as e:
                     logger.error(f"Process error: {e}")
+                finally:
+                    processing_lock = False
             
             async def handle_dg():
-                nonlocal transcript_buffer, response_task, should_stop, last_transcript_time, interrupt_buffer, is_speaking
+                nonlocal transcript_buffer, response_task, should_stop, last_transcript_time, interrupt_buffer
                 try:
                     async for msg in dg:
                         if should_stop: break
@@ -238,16 +249,14 @@ async def realtime_conversation(websocket: WebSocket):
                                 last_transcript_time = time.time()
                                 logger.info(f"Got: {t}")
                                 
-                                # If AI is speaking, this is an interrupt
+                                # If AI is speaking, this is an interrupt - collect it
                                 if is_speaking:
                                     interrupt_buffer += " " + t
-                                    logger.info(f"Interrupt detected: {t}")
-                                    # Don't stop mid-word - only if meaningful speech
-                                    if len(interrupt_buffer.split()) >= 2:
-                                        # Signal to stop TTS (will be picked up next loop)
-                                        pass  # Let TTS finish current chunk naturally
+                                    logger.info(f"Interrupt collected: {t}")
                                 else:
+                                    # Accumulate transcript
                                     transcript_buffer += " " + t
+                                    # Cancel previous pending process and start new timer
                                     if response_task and not response_task.done(): 
                                         response_task.cancel()
                                     response_task = asyncio.create_task(process())

@@ -207,14 +207,11 @@ async def realtime_conversation(websocket: WebSocket):
                             if t and data.get("is_final"):
                                 transcript_buffer += " " + t
                                 logger.info(f"Got: {t}")
-                                if response_task: response_task.cancel()
+                                # Only use silence timeout - cancel and restart timer
+                                if response_task: 
+                                    response_task.cancel()
                                 response_task = asyncio.create_task(process())
-                            if data.get("speech_final") and transcript_buffer.strip():
-                                if response_task: response_task.cancel()
-                                response_task = asyncio.create_task(process())
-                        elif data.get("type") == "UtteranceEnd" and transcript_buffer.strip():
-                            if response_task: response_task.cancel()
-                            response_task = asyncio.create_task(process())
+                        # Ignore speech_final and UtteranceEnd - let silence timeout handle it
                 except Exception as e:
                     logger.error(f"DG error: {e}")
             

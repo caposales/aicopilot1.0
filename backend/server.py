@@ -189,21 +189,30 @@ async def realtime_conversation(websocket: WebSocket):
             
             response_task = None
             last_transcript_time = 0
+            min_words = 4  # Require at least 4 words to respond
             
             async def process():
                 nonlocal transcript_buffer, last_transcript_time
-                # Wait for true silence - no new transcripts for 800ms
-                await asyncio.sleep(0.8)
+                # Wait for true silence
+                await asyncio.sleep(1.0)  # 1 second of silence
                 
                 # Check if we got new transcripts during the wait
-                if time.time() - last_transcript_time < 0.7:
+                if time.time() - last_transcript_time < 0.9:
                     return  # Still getting transcripts, don't respond yet
                 
                 msg = transcript_buffer.strip()
+                word_count = len(msg.split())
+                
+                # Require minimum words to filter out noise
+                if word_count < min_words:
+                    logger.info(f"Ignoring short input ({word_count} words): {msg}")
+                    transcript_buffer = ""
+                    return
+                
                 transcript_buffer = ""
                 
-                if len(msg) >= 3 and not is_speaking and not should_stop:
-                    logger.info(f"Processing: {msg}")
+                if not is_speaking and not should_stop:
+                    logger.info(f"Processing ({word_count} words): {msg}")
                     try:
                         await websocket.send_json({"type": "status", "status": "speaking"})
                         await respond(msg)

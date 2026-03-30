@@ -66,6 +66,7 @@ async def realtime_conversation(websocket: WebSocket):
     should_stop = False
     transcript_buffer = ""
     conversation = []
+    speaking_cooldown = 0  # Time until we accept new input
     
     async def speak(text):
         nonlocal is_speaking
@@ -98,6 +99,7 @@ async def realtime_conversation(websocket: WebSocket):
             logger.error(f"TTS error: {e}")
         finally:
             is_speaking = False
+            speaking_cooldown = time.time() + 0.5  # 500ms cooldown after speaking
     
     async def respond(user_msg):
         nonlocal is_speaking, conversation
@@ -169,6 +171,7 @@ async def realtime_conversation(websocket: WebSocket):
         
         conversation.append({"role": "assistant", "content": full_response})
         is_speaking = False
+        speaking_cooldown = time.time() + 0.5  # 500ms cooldown
     
     try:
         async with websockets.connect(
@@ -214,7 +217,10 @@ async def realtime_conversation(websocket: WebSocket):
                 try:
                     async for msg in dg:
                         if should_stop: break
-                        if is_speaking: continue
+                        
+                        # Ignore ALL input while speaking or in cooldown
+                        if is_speaking or time.time() < speaking_cooldown:
+                            continue
                         
                         data = json.loads(msg)
                         if data.get("type") == "Results":
@@ -237,8 +243,10 @@ async def realtime_conversation(websocket: WebSocket):
                     while not should_stop:
                         msg = await websocket.receive()
                         if msg["type"] == "websocket.receive":
-                            if "bytes" in msg and not is_speaking:
-                                await dg.send(msg["bytes"])
+                            if "bytes" in msg:
+                                # Only send audio when NOT speaking and not in cooldown
+                                if not is_speaking and time.time() >= speaking_cooldown:
+                                    await dg.send(msg["bytes"])
                             elif "text" in msg:
                                 d = json.loads(msg["text"])
                                 if d.get("type") == "stop":

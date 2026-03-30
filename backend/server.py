@@ -137,7 +137,7 @@ async def realtime_conversation(websocket: WebSocket):
                         "POST",
                         "https://integrations.emergentagent.com/llm/chat/completions",
                         headers={"Authorization": f"Bearer {llm_key}", "Content-Type": "application/json"},
-                        json={"model": "gpt-5.2", "messages": messages, "max_tokens": 80, "stream": True},
+                        json={"model": "gpt-5.2", "messages": messages, "max_tokens": 50, "stream": True},
                         timeout=30.0
                     ) as resp:
                         buf = ""
@@ -184,7 +184,7 @@ async def realtime_conversation(websocket: WebSocket):
             
             async def process():
                 nonlocal transcript_buffer
-                await asyncio.sleep(0.15)
+                await asyncio.sleep(0.05)  # 50ms - ultra fast
                 msg = transcript_buffer.strip()
                 transcript_buffer = ""
                 if len(msg) >= 3 and not is_speaking:

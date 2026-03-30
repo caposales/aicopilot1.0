@@ -269,20 +269,28 @@ async def realtime_conversation(websocket: WebSocket):
             await websocket.send_json({"type": "status", "status": "listening"})
             
             async def handle_deepgram():
-                """Handle transcription - respond FAST"""
+                """Handle transcription - respond FAST, ignore noise"""
                 nonlocal transcript_buffer, should_stop
                 
                 silence_task = None
                 
                 async def respond_now():
-                    """Respond immediately"""
+                    """Respond immediately if we have real speech"""
                     nonlocal transcript_buffer
-                    await asyncio.sleep(0.2)  # 200ms - ultra fast
+                    await asyncio.sleep(0.15)  # 150ms - faster
                     
-                    if transcript_buffer.strip() and not is_speaking:
-                        message = transcript_buffer.strip()
+                    message = transcript_buffer.strip()
+                    
+                    # Ignore very short utterances (likely noise/coughs)
+                    # Must be at least 2 words or 8 characters
+                    word_count = len(message.split())
+                    if word_count < 2 and len(message) < 8:
+                        logger.info(f"Ignoring short utterance: '{message}'")
                         transcript_buffer = ""
-                        
+                        return
+                    
+                    if message and not is_speaking:
+                        transcript_buffer = ""
                         await websocket.send_json({"type": "status", "status": "speaking"})
                         await stream_llm_to_tts(message)
                         await websocket.send_json({"type": "status", "status": "listening"})
@@ -300,7 +308,8 @@ async def realtime_conversation(websocket: WebSocket):
                             is_final = data.get("is_final", False)
                             speech_final = data.get("speech_final", False)
                             
-                            if transcript and is_final:
+                            # Only process if we have actual words
+                            if transcript and is_final and len(transcript.strip()) > 0:
                                 transcript_buffer += " " + transcript
                                 
                                 if silence_task:
@@ -310,13 +319,13 @@ async def realtime_conversation(websocket: WebSocket):
                             if speech_final and transcript_buffer.strip():
                                 if silence_task:
                                     silence_task.cancel()
-                                asyncio.create_task(respond_now())
+                                silence_task = asyncio.create_task(respond_now())
                         
                         elif data.get("type") == "UtteranceEnd":
                             if transcript_buffer.strip() and not is_speaking:
                                 if silence_task:
                                     silence_task.cancel()
-                                asyncio.create_task(respond_now())
+                                silence_task = asyncio.create_task(respond_now())
                                 
                 except Exception as e:
                     logger.error(f"Deepgram handler error: {e}")

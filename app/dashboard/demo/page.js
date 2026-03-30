@@ -1,7 +1,6 @@
 'use client'
 
-import { useState, useRef, useEffect, useCallback } from 'react'
-import { Button } from '@/components/ui/button'
+import { useState, useRef, useEffect } from 'react'
 import { toast } from 'sonner'
 import { Phone, PhoneOff, Loader2, Mic, Volume2 } from 'lucide-react'
 
@@ -9,7 +8,6 @@ export default function AgentDemoPage() {
   const [agents, setAgents] = useState([])
   const [selectedAgent, setSelectedAgent] = useState(null)
   const [isLoading, setIsLoading] = useState(true)
-  
   const [isCallActive, setIsCallActive] = useState(false)
   const [status, setStatus] = useState('idle')
   const [callDuration, setCallDuration] = useState(0)
@@ -21,64 +19,51 @@ export default function AgentDemoPage() {
   const callTimerRef = useRef(null)
   const audioContextRef = useRef(null)
   const nextPlayTimeRef = useRef(0)
+  const isEndingRef = useRef(false)
 
   useEffect(() => {
     fetchAgents()
-    return () => cleanup()
   }, [])
 
-  const cleanup = useCallback(() => {
-    // Stop timer
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      forceCleanup()
+    }
+  }, [])
+
+  const forceCleanup = () => {
     if (callTimerRef.current) {
       clearInterval(callTimerRef.current)
       callTimerRef.current = null
     }
     
-    // Close WebSocket
     if (wsRef.current) {
       try { 
-        if (wsRef.current.readyState === WebSocket.OPEN) {
-          wsRef.current.send(JSON.stringify({ type: 'stop' }))
-        }
-        wsRef.current.close(1000, 'User ended call')
-      } catch(e) {
-        console.log('WS close error:', e)
-      }
+        wsRef.current.close(1000)
+      } catch(e) {}
       wsRef.current = null
     }
     
-    // Stop media recorder
     if (mediaRecorderRef.current) {
       try {
-        if (mediaRecorderRef.current.state !== 'inactive') {
-          mediaRecorderRef.current.stop()
-        }
-      } catch(e) {
-        console.log('MediaRecorder stop error:', e)
-      }
+        mediaRecorderRef.current.stop()
+      } catch(e) {}
       mediaRecorderRef.current = null
     }
     
-    // Stop microphone stream
     if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => {
-        track.stop()
-      })
+      streamRef.current.getTracks().forEach(track => track.stop())
       streamRef.current = null
     }
     
-    // Close audio context
     if (audioContextRef.current) {
       try {
         audioContextRef.current.close()
-      } catch(e) {
-        console.log('AudioContext close error:', e)
-      }
+      } catch(e) {}
       audioContextRef.current = null
     }
-    
-    nextPlayTimeRef.current = 0
-  }, [])
+  }
 
   const getAuthHeaders = () => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null
@@ -99,11 +84,8 @@ export default function AgentDemoPage() {
   }
 
   const startCall = async () => {
-    if (!selectedAgent) {
-      toast.error('Select an agent first')
-      return
-    }
-
+    if (!selectedAgent || isEndingRef.current) return
+    
     setStatus('connecting')
     
     try {
@@ -112,7 +94,6 @@ export default function AgentDemoPage() {
       })
       streamRef.current = stream
       
-      // Initialize audio context for PCM playback
       audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 })
       nextPlayTimeRef.current = 0
       
@@ -120,18 +101,18 @@ export default function AgentDemoPage() {
       setCallDuration(0)
       callTimerRef.current = setInterval(() => setCallDuration(p => p + 1), 1000)
       
-      await connectRealtime(stream)
+      connectRealtime(stream)
       
     } catch (e) {
       console.error('Failed to start call:', e)
       toast.error('Could not access microphone')
-      cleanup()
+      forceCleanup()
       setIsCallActive(false)
       setStatus('idle')
     }
   }
 
-  const connectRealtime = async (stream) => {
+  const connectRealtime = (stream) => {
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const wsHost = window.location.host
     const wsUrl = `${wsProtocol}//${wsHost}/api/ws/realtime`
@@ -140,50 +121,50 @@ export default function AgentDemoPage() {
     wsRef.current = ws
     
     ws.onopen = () => {
+      if (isEndingRef.current) {
+        ws.close()
+        return
+      }
       ws.send(JSON.stringify({
         voiceId: selectedAgent.voiceId || 'EXAVITQu4vr4xnSDxMaL',
-        systemPrompt: selectedAgent.customPrompt || selectedAgent.systemPrompt || 'You are a helpful assistant. Be very concise - 1-2 sentences max.',
-        initialMessage: selectedAgent.initialMessage || 'Hello! How can I help you?'
+        systemPrompt: selectedAgent.customPrompt || 'You are a helpful assistant. Be concise - 1 sentence max.',
+        initialMessage: selectedAgent.initialMessage || 'Hello!'
       }))
     }
     
-    ws.onmessage = async (event) => {
+    ws.onmessage = (event) => {
+      if (isEndingRef.current) return
+      
       try {
         const data = JSON.parse(event.data)
         
-        switch (data.type) {
-          case 'connected':
-            toast.success('Connected!')
-            startAudioStreaming(stream, ws)
-            break
-            
-          case 'status':
-            setStatus(data.status)
-            break
-            
-          case 'audio':
-            // Play PCM audio immediately
-            playPCMAudio(data.data)
-            break
-            
-          case 'audio_end':
-            // Audio finished
-            break
-            
-          case 'error':
-            toast.error(data.message)
-            break
+        if (data.type === 'connected') {
+          startAudioStreaming(stream, ws)
+        } else if (data.type === 'status') {
+          setStatus(data.status)
+        } else if (data.type === 'audio') {
+          playPCMAudio(data.data)
+        } else if (data.type === 'error') {
+          toast.error(data.message)
         }
-      } catch (e) {
-        console.error('Message error:', e)
-      }
+      } catch (e) {}
     }
     
-    ws.onerror = () => toast.error('Connection error')
-    ws.onclose = (e) => { if (e.code !== 1000) toast.error('Connection lost') }
+    ws.onerror = () => {
+      if (!isEndingRef.current) toast.error('Connection error')
+    }
+    
+    ws.onclose = () => {
+      if (!isEndingRef.current) {
+        setIsCallActive(false)
+        setStatus('idle')
+      }
+    }
   }
 
   const startAudioStreaming = (stream, ws) => {
+    if (isEndingRef.current) return
+    
     const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') 
       ? 'audio/webm;codecs=opus' : 'audio/webm'
     
@@ -191,59 +172,64 @@ export default function AgentDemoPage() {
     mediaRecorderRef.current = mediaRecorder
     
     mediaRecorder.ondataavailable = async (event) => {
-      if (event.data.size > 0 && ws.readyState === WebSocket.OPEN) {
+      if (event.data.size > 0 && ws.readyState === WebSocket.OPEN && !isEndingRef.current) {
         ws.send(await event.data.arrayBuffer())
       }
     }
     
-    // Stream every 100ms
     mediaRecorder.start(100)
   }
 
   const playPCMAudio = (base64Data) => {
-    if (!audioContextRef.current) return
+    if (!audioContextRef.current || isEndingRef.current) return
     
-    const ctx = audioContextRef.current
-    
-    // Decode base64 to PCM bytes
-    const binaryString = atob(base64Data)
-    const bytes = new Uint8Array(binaryString.length)
-    for (let i = 0; i < binaryString.length; i++) {
-      bytes[i] = binaryString.charCodeAt(i)
+    try {
+      const ctx = audioContextRef.current
+      const binaryString = atob(base64Data)
+      const bytes = new Uint8Array(binaryString.length)
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i)
+      }
+      
+      const int16 = new Int16Array(bytes.buffer)
+      const float32 = new Float32Array(int16.length)
+      for (let i = 0; i < int16.length; i++) {
+        float32[i] = int16[i] / 32768.0
+      }
+      
+      const audioBuffer = ctx.createBuffer(1, float32.length, 24000)
+      audioBuffer.getChannelData(0).set(float32)
+      
+      const source = ctx.createBufferSource()
+      source.buffer = audioBuffer
+      source.connect(ctx.destination)
+      
+      const currentTime = ctx.currentTime
+      const startTime = Math.max(currentTime, nextPlayTimeRef.current)
+      source.start(startTime)
+      nextPlayTimeRef.current = startTime + audioBuffer.duration
+    } catch (e) {
+      console.error('Audio play error:', e)
     }
-    
-    // Convert to Int16 samples
-    const int16 = new Int16Array(bytes.buffer)
-    
-    // Convert to Float32 for Web Audio API
-    const float32 = new Float32Array(int16.length)
-    for (let i = 0; i < int16.length; i++) {
-      float32[i] = int16[i] / 32768.0
-    }
-    
-    // Create audio buffer
-    const audioBuffer = ctx.createBuffer(1, float32.length, 24000)
-    audioBuffer.getChannelData(0).set(float32)
-    
-    // Schedule playback
-    const source = ctx.createBufferSource()
-    source.buffer = audioBuffer
-    source.connect(ctx.destination)
-    
-    // Calculate when to play this chunk
-    const currentTime = ctx.currentTime
-    const startTime = Math.max(currentTime, nextPlayTimeRef.current)
-    
-    source.start(startTime)
-    nextPlayTimeRef.current = startTime + audioBuffer.duration
   }
 
   const endCall = () => {
-    console.log('Ending call...')
-    cleanup()
+    console.log('END CALL CLICKED')
+    isEndingRef.current = true
+    
+    // Immediately update UI
     setIsCallActive(false)
     setStatus('idle')
     setCallDuration(0)
+    
+    // Clean up resources
+    forceCleanup()
+    
+    // Reset ending flag after a short delay
+    setTimeout(() => {
+      isEndingRef.current = false
+    }, 500)
+    
     toast.info('Call ended')
   }
 
@@ -255,7 +241,7 @@ export default function AgentDemoPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-900 to-gray-800 flex flex-col items-center justify-center p-4">
-      {/* Agent selector - minimal */}
+      {/* Agent selector */}
       {!isCallActive && agents.length > 0 && (
         <div className="mb-8 flex gap-2 flex-wrap justify-center">
           {agents.map((agent) => (
@@ -274,7 +260,7 @@ export default function AgentDemoPage() {
         </div>
       )}
 
-      {/* Simple status */}
+      {/* Status */}
       {isCallActive && (
         <div className="mb-6 text-center">
           <div className="flex items-center justify-center gap-2 mb-2">
@@ -286,38 +272,31 @@ export default function AgentDemoPage() {
         </div>
       )}
 
-      {/* Call button */}
-      <div className="relative">
-        {!isCallActive ? (
-          <button
-            onClick={startCall}
-            disabled={!selectedAgent}
-            className="w-36 h-36 rounded-full bg-green-500 hover:bg-green-400 shadow-lg shadow-green-500/30 hover:shadow-green-400/50 transition-all flex items-center justify-center disabled:opacity-50"
-            data-testid="start-call-btn"
-          >
-            <Phone className="w-14 h-14 text-white" />
-          </button>
-        ) : (
-          <button
-            onClick={(e) => {
-              e.preventDefault()
-              e.stopPropagation()
-              endCall()
-            }}
-            className="w-36 h-36 rounded-full bg-red-500 hover:bg-red-400 shadow-lg shadow-red-500/30 transition-all flex items-center justify-center cursor-pointer z-50"
-            data-testid="end-call-btn"
-          >
-            <PhoneOff className="w-14 h-14 text-white" />
-          </button>
-        )}
-        
-        {status === 'listening' && (
-          <>
-            <div className="absolute inset-0 rounded-full border-4 border-green-400 animate-ping opacity-20" />
-            <div className="absolute inset-0 rounded-full border-2 border-green-400 animate-pulse opacity-40" />
-          </>
-        )}
-      </div>
+      {/* Call buttons */}
+      {!isCallActive ? (
+        <button
+          onClick={startCall}
+          disabled={!selectedAgent}
+          className="w-36 h-36 rounded-full bg-green-500 hover:bg-green-400 shadow-lg shadow-green-500/30 transition-all flex items-center justify-center disabled:opacity-50"
+        >
+          <Phone className="w-14 h-14 text-white" />
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={endCall}
+          className="w-36 h-36 rounded-full bg-red-500 hover:bg-red-400 shadow-lg shadow-red-500/30 transition-all flex items-center justify-center cursor-pointer"
+          style={{ pointerEvents: 'auto' }}
+        >
+          <PhoneOff className="w-14 h-14 text-white" />
+        </button>
+      )}
+
+      {status === 'listening' && isCallActive && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <div className="w-36 h-36 rounded-full border-4 border-green-400 animate-ping opacity-20" />
+        </div>
+      )}
 
       <p className="mt-6 text-gray-500 text-sm">
         {isCallActive ? 'Tap to end' : 'Tap to call'}

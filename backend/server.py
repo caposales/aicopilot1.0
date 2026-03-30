@@ -44,9 +44,9 @@ async def realtime_conversation(websocket: WebSocket):
     
     deepgram_key = os.environ.get('DEEPGRAM_API_KEY')
     elevenlabs_key = os.environ.get('ELEVENLABS_API_KEY')
-    llm_key = os.environ.get('EMERGENT_LLM_KEY')
+    groq_key = os.environ.get('GROQ_API_KEY')
     
-    if not all([deepgram_key, elevenlabs_key, llm_key]):
+    if not all([deepgram_key, elevenlabs_key, groq_key]):
         await websocket.send_json({"type": "error", "message": "Missing API keys"})
         await websocket.close()
         return
@@ -131,13 +131,13 @@ async def realtime_conversation(websocket: WebSocket):
                 
                 audio_task = asyncio.create_task(forward())
                 
-                # Stream LLM
+                # Stream LLM from Groq (ultra fast)
                 async with httpx.AsyncClient() as client:
                     async with client.stream(
                         "POST",
-                        "https://integrations.emergentagent.com/llm/chat/completions",
-                        headers={"Authorization": f"Bearer {llm_key}", "Content-Type": "application/json"},
-                        json={"model": "gpt-5.2", "messages": messages, "max_tokens": 50, "stream": True},
+                        "https://api.groq.com/openai/v1/chat/completions",
+                        headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
+                        json={"model": "llama-3.3-70b-versatile", "messages": messages, "max_tokens": 50, "stream": True},
                         timeout=30.0
                     ) as resp:
                         buf = ""

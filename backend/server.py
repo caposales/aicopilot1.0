@@ -192,17 +192,17 @@ async def realtime_conversation(websocket: WebSocket):
             interrupt_buffer = ""  # Collect speech during AI talking
             
             async def process():
-                nonlocal transcript_buffer, last_transcript_time
+                nonlocal transcript_buffer, last_transcript_time, interrupt_buffer
                 
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.6)  # Wait for user to finish speaking
                 
-                if time.time() - last_transcript_time < 0.4:
-                    return
+                if time.time() - last_transcript_time < 0.5:
+                    return  # User still speaking
                 
                 msg = transcript_buffer.strip()
                 transcript_buffer = ""
                 
-                if not msg or len(msg.split()) < 3 or should_stop or is_speaking:
+                if not msg or len(msg.split()) < 2 or should_stop or is_speaking:
                     return
                 
                 logger.info(f"Processing: {msg}")
@@ -212,11 +212,10 @@ async def realtime_conversation(websocket: WebSocket):
                     await respond(msg)
                     
                     # After speaking, check if user interrupted with something meaningful
-                    if interrupt_buffer.strip() and len(interrupt_buffer.split()) >= 3:
+                    if interrupt_buffer.strip() and len(interrupt_buffer.split()) >= 2:
                         logger.info(f"User interrupted with: {interrupt_buffer}")
                         transcript_buffer = interrupt_buffer
                         interrupt_buffer = ""
-                        # Process the interrupt
                         await asyncio.sleep(0.3)
                         await process()
                     else:
@@ -227,7 +226,7 @@ async def realtime_conversation(websocket: WebSocket):
                     logger.error(f"Process error: {e}")
             
             async def handle_dg():
-                nonlocal transcript_buffer, response_task, should_stop, last_transcript_time, interrupt_buffer
+                nonlocal transcript_buffer, response_task, should_stop, last_transcript_time, interrupt_buffer, is_speaking
                 try:
                     async for msg in dg:
                         if should_stop: break
@@ -239,9 +238,14 @@ async def realtime_conversation(websocket: WebSocket):
                                 last_transcript_time = time.time()
                                 logger.info(f"Got: {t}")
                                 
-                                # If AI is speaking, collect as potential interrupt
-                                if is_speaking or time.time() < speaking_cooldown:
+                                # If AI is speaking, this is an interrupt
+                                if is_speaking:
                                     interrupt_buffer += " " + t
+                                    logger.info(f"Interrupt detected: {t}")
+                                    # Don't stop mid-word - only if meaningful speech
+                                    if len(interrupt_buffer.split()) >= 2:
+                                        # Signal to stop TTS (will be picked up next loop)
+                                        pass  # Let TTS finish current chunk naturally
                                 else:
                                     transcript_buffer += " " + t
                                     if response_task and not response_task.done(): 
@@ -257,9 +261,8 @@ async def realtime_conversation(websocket: WebSocket):
                         msg = await websocket.receive()
                         if msg["type"] == "websocket.receive":
                             if "bytes" in msg:
-                                # Only send audio when NOT speaking and not in cooldown
-                                if not is_speaking and time.time() >= speaking_cooldown:
-                                    await dg.send(msg["bytes"])
+                                # Always send audio to Deepgram for interrupt detection
+                                await dg.send(msg["bytes"])
                             elif "text" in msg:
                                 d = json.loads(msg["text"])
                                 if d.get("type") == "stop":

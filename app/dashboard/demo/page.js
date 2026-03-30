@@ -11,9 +11,7 @@ export default function AgentDemoPage() {
   const [isLoading, setIsLoading] = useState(true)
   
   const [isCallActive, setIsCallActive] = useState(false)
-  const [status, setStatus] = useState('idle') // idle, connecting, listening, processing, speaking
-  const [transcript, setTranscript] = useState('')
-  const [aiText, setAiText] = useState('')
+  const [status, setStatus] = useState('idle')
   const [callDuration, setCallDuration] = useState(0)
 
   // Refs
@@ -22,8 +20,7 @@ export default function AgentDemoPage() {
   const streamRef = useRef(null)
   const callTimerRef = useRef(null)
   const audioContextRef = useRef(null)
-  const audioQueueRef = useRef([])
-  const isPlayingRef = useRef(false)
+  const nextPlayTimeRef = useRef(0)
 
   useEffect(() => {
     fetchAgents()
@@ -47,8 +44,7 @@ export default function AgentDemoPage() {
     if (audioContextRef.current) {
       audioContextRef.current.close().catch(() => {})
     }
-    audioQueueRef.current = []
-    isPlayingRef.current = false
+    nextPlayTimeRef.current = 0
   }, [])
 
   const getAuthHeaders = () => {
@@ -76,24 +72,21 @@ export default function AgentDemoPage() {
     }
 
     setStatus('connecting')
-    setTranscript('')
-    setAiText('')
     
     try {
-      // Get microphone access
       const stream = await navigator.mediaDevices.getUserMedia({ 
         audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }
       })
       streamRef.current = stream
       
-      // Initialize audio context for playback
-      audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)()
+      // Initialize audio context for PCM playback
+      audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 })
+      nextPlayTimeRef.current = 0
       
       setIsCallActive(true)
       setCallDuration(0)
       callTimerRef.current = setInterval(() => setCallDuration(p => p + 1), 1000)
       
-      // Connect to real-time streaming endpoint
       await connectRealtime(stream)
       
     } catch (e) {
@@ -110,16 +103,13 @@ export default function AgentDemoPage() {
     const wsHost = window.location.host
     const wsUrl = `${wsProtocol}//${wsHost}/api/ws/realtime`
     
-    console.log('Connecting to realtime endpoint:', wsUrl)
     const ws = new WebSocket(wsUrl)
     wsRef.current = ws
     
     ws.onopen = () => {
-      console.log('WebSocket opened, sending config...')
-      // Send agent config
       ws.send(JSON.stringify({
         voiceId: selectedAgent.voiceId || 'EXAVITQu4vr4xnSDxMaL',
-        systemPrompt: selectedAgent.customPrompt || selectedAgent.systemPrompt || 'You are a helpful assistant. Be concise.',
+        systemPrompt: selectedAgent.customPrompt || selectedAgent.systemPrompt || 'You are a helpful assistant. Be very concise - 1-2 sentences max.',
         initialMessage: selectedAgent.initialMessage || 'Hello! How can I help you?'
       }))
     }
@@ -130,7 +120,6 @@ export default function AgentDemoPage() {
         
         switch (data.type) {
           case 'connected':
-            console.log('Connected to realtime service')
             toast.success('Connected!')
             startAudioStreaming(stream, ws)
             break
@@ -139,55 +128,26 @@ export default function AgentDemoPage() {
             setStatus(data.status)
             break
             
-          case 'transcript':
-            setTranscript(data.text)
-            break
-            
-          case 'user_message':
-            console.log('User said:', data.content)
-            setTranscript('')
-            break
-            
-          case 'text':
-            if (data.partial) {
-              setAiText(prev => prev + data.content)
-            } else {
-              // Full response complete
-              setAiText('')
-            }
-            break
-            
           case 'audio':
-            // Queue audio chunk for playback
-            const audioData = base64ToArrayBuffer(data.data)
-            playAudioChunk(audioData)
+            // Play PCM audio immediately
+            playPCMAudio(data.data)
             break
             
           case 'audio_end':
-            console.log('Audio stream ended')
+            // Audio finished
             break
             
           case 'error':
-            console.error('Server error:', data.message)
             toast.error(data.message)
             break
         }
       } catch (e) {
-        console.error('Message parse error:', e)
+        console.error('Message error:', e)
       }
     }
     
-    ws.onerror = (error) => {
-      console.error('WebSocket error:', error)
-      toast.error('Connection error')
-    }
-    
-    ws.onclose = (event) => {
-      console.log('WebSocket closed:', event.code)
-      if (event.code !== 1000) {
-        toast.error('Connection lost')
-      }
-    }
+    ws.onerror = () => toast.error('Connection error')
+    ws.onclose = (e) => { if (e.code !== 1000) toast.error('Connection lost') }
   }
 
   const startAudioStreaming = (stream, ws) => {
@@ -199,83 +159,67 @@ export default function AgentDemoPage() {
     
     mediaRecorder.ondataavailable = async (event) => {
       if (event.data.size > 0 && ws.readyState === WebSocket.OPEN) {
-        const arrayBuffer = await event.data.arrayBuffer()
-        ws.send(arrayBuffer)
+        ws.send(await event.data.arrayBuffer())
       }
     }
     
-    // Stream audio every 100ms for low latency
+    // Stream every 100ms
     mediaRecorder.start(100)
-    console.log('Started streaming audio')
   }
 
-  const base64ToArrayBuffer = (base64) => {
-    const binaryString = atob(base64)
+  const playPCMAudio = (base64Data) => {
+    if (!audioContextRef.current) return
+    
+    const ctx = audioContextRef.current
+    
+    // Decode base64 to PCM bytes
+    const binaryString = atob(base64Data)
     const bytes = new Uint8Array(binaryString.length)
     for (let i = 0; i < binaryString.length; i++) {
       bytes[i] = binaryString.charCodeAt(i)
     }
-    return bytes.buffer
-  }
-
-  const playAudioChunk = async (arrayBuffer) => {
-    if (!audioContextRef.current) return
     
-    // Queue the audio chunk
-    audioQueueRef.current.push(arrayBuffer)
+    // Convert to Int16 samples
+    const int16 = new Int16Array(bytes.buffer)
     
-    // If not currently playing, start playing
-    if (!isPlayingRef.current) {
-      playNextChunk()
-    }
-  }
-
-  const playNextChunk = async () => {
-    if (audioQueueRef.current.length === 0) {
-      isPlayingRef.current = false
-      return
+    // Convert to Float32 for Web Audio API
+    const float32 = new Float32Array(int16.length)
+    for (let i = 0; i < int16.length; i++) {
+      float32[i] = int16[i] / 32768.0
     }
     
-    isPlayingRef.current = true
-    const chunk = audioQueueRef.current.shift()
+    // Create audio buffer
+    const audioBuffer = ctx.createBuffer(1, float32.length, 24000)
+    audioBuffer.getChannelData(0).set(float32)
     
-    try {
-      // Decode and play the audio chunk
-      const audioBuffer = await audioContextRef.current.decodeAudioData(chunk.slice(0))
-      const source = audioContextRef.current.createBufferSource()
-      source.buffer = audioBuffer
-      source.connect(audioContextRef.current.destination)
-      
-      source.onended = () => {
-        playNextChunk()
-      }
-      
-      source.start(0)
-    } catch (e) {
-      // MP3 chunks might not decode individually, accumulate them
-      console.log('Chunk decode issue, continuing...')
-      playNextChunk()
-    }
+    // Schedule playback
+    const source = ctx.createBufferSource()
+    source.buffer = audioBuffer
+    source.connect(ctx.destination)
+    
+    // Calculate when to play this chunk
+    const currentTime = ctx.currentTime
+    const startTime = Math.max(currentTime, nextPlayTimeRef.current)
+    
+    source.start(startTime)
+    nextPlayTimeRef.current = startTime + audioBuffer.duration
   }
 
   const endCall = () => {
     cleanup()
     setIsCallActive(false)
     setStatus('idle')
-    setTranscript('')
-    setAiText('')
-    toast.info(`Call ended`)
   }
 
   const formatDuration = (s) => `${Math.floor(s/60)}:${(s%60).toString().padStart(2,'0')}`
 
   if (isLoading) {
-    return <div className="flex items-center justify-center min-h-screen"><Loader2 className="w-8 h-8 animate-spin" /></div>
+    return <div className="flex items-center justify-center min-h-screen bg-gray-900"><Loader2 className="w-8 h-8 animate-spin text-white" /></div>
   }
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-900 to-gray-800 flex flex-col items-center justify-center p-4">
-      {/* Agent selector */}
+      {/* Agent selector - minimal */}
       {!isCallActive && agents.length > 0 && (
         <div className="mb-8 flex gap-2 flex-wrap justify-center">
           {agents.map((agent) => (
@@ -294,31 +238,15 @@ export default function AgentDemoPage() {
         </div>
       )}
 
-      {/* Status indicator */}
+      {/* Simple status */}
       {isCallActive && (
         <div className="mb-6 text-center">
           <div className="flex items-center justify-center gap-2 mb-2">
-            {status === 'listening' && <Mic className="w-5 h-5 text-green-400 animate-pulse" />}
-            {status === 'processing' && <Loader2 className="w-5 h-5 text-yellow-400 animate-spin" />}
-            {status === 'speaking' && <Volume2 className="w-5 h-5 text-blue-400 animate-pulse" />}
-            {status === 'connecting' && <Loader2 className="w-5 h-5 text-gray-400 animate-spin" />}
-            <span className="text-white font-medium capitalize">{status}</span>
+            {status === 'listening' && <Mic className="w-6 h-6 text-green-400 animate-pulse" />}
+            {status === 'speaking' && <Volume2 className="w-6 h-6 text-blue-400 animate-pulse" />}
+            {status === 'connecting' && <Loader2 className="w-6 h-6 text-gray-400 animate-spin" />}
           </div>
-          <span className="text-gray-400 font-mono">{formatDuration(callDuration)}</span>
-        </div>
-      )}
-
-      {/* Live transcript */}
-      {transcript && (
-        <div className="mb-4 max-w-md text-center">
-          <p className="text-green-400 text-lg italic">"{transcript}"</p>
-        </div>
-      )}
-
-      {/* AI response (streaming) */}
-      {aiText && (
-        <div className="mb-4 max-w-md text-center">
-          <p className="text-blue-400 text-lg">{aiText}<span className="animate-pulse">▊</span></p>
+          <span className="text-gray-400 font-mono text-sm">{formatDuration(callDuration)}</span>
         </div>
       )}
 
@@ -328,20 +256,19 @@ export default function AgentDemoPage() {
           <button
             onClick={startCall}
             disabled={!selectedAgent}
-            className="w-32 h-32 rounded-full bg-green-500 hover:bg-green-400 shadow-lg shadow-green-500/30 hover:shadow-green-400/50 transition-all flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-36 h-36 rounded-full bg-green-500 hover:bg-green-400 shadow-lg shadow-green-500/30 hover:shadow-green-400/50 transition-all flex items-center justify-center disabled:opacity-50"
           >
-            <Phone className="w-12 h-12 text-white" />
+            <Phone className="w-14 h-14 text-white" />
           </button>
         ) : (
           <button
             onClick={endCall}
-            className="w-32 h-32 rounded-full bg-red-500 hover:bg-red-400 shadow-lg shadow-red-500/30 transition-all flex items-center justify-center"
+            className="w-36 h-36 rounded-full bg-red-500 hover:bg-red-400 shadow-lg shadow-red-500/30 transition-all flex items-center justify-center"
           >
-            <PhoneOff className="w-12 h-12 text-white" />
+            <PhoneOff className="w-14 h-14 text-white" />
           </button>
         )}
         
-        {/* Ripple effect when listening */}
         {status === 'listening' && (
           <>
             <div className="absolute inset-0 rounded-full border-4 border-green-400 animate-ping opacity-20" />
@@ -351,15 +278,8 @@ export default function AgentDemoPage() {
       </div>
 
       <p className="mt-6 text-gray-500 text-sm">
-        {isCallActive ? 'Tap to end call' : 'Tap to start'}
+        {isCallActive ? 'Tap to end' : 'Tap to call'}
       </p>
-
-      {/* Streaming indicator */}
-      {isCallActive && (
-        <div className="mt-4 text-xs text-gray-600">
-          Real-time streaming: Deepgram → OpenAI → ElevenLabs
-        </div>
-      )}
     </div>
   )
 }

@@ -10,7 +10,6 @@ import asyncio
 import websockets
 import json
 import base64
-import re
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -47,19 +46,17 @@ async def health():
 
 
 # =============================================================================
-# REAL-TIME STREAMING CONVERSATION ENDPOINT
-# Combines: Deepgram STT -> OpenAI Streaming -> ElevenLabs Streaming TTS
+# ULTRA LOW LATENCY REAL-TIME CONVERSATION
+# Deepgram STT -> OpenAI Streaming -> ElevenLabs WebSocket TTS (PCM)
 # =============================================================================
 
 @app.websocket("/api/ws/realtime")
 async def realtime_conversation(websocket: WebSocket):
     """
-    Real-time streaming conversation:
-    1. Receives audio from client
-    2. Streams to Deepgram for real-time transcription
-    3. When user finishes speaking, streams to OpenAI
-    4. Streams OpenAI response to ElevenLabs for TTS
-    5. Streams audio chunks back to client immediately
+    Ultra low-latency streaming conversation:
+    - Deepgram for instant STT
+    - OpenAI streaming for word-by-word response
+    - ElevenLabs WebSocket for PCM audio streaming
     """
     await websocket.accept()
     
@@ -76,7 +73,7 @@ async def realtime_conversation(websocket: WebSocket):
     # Get config from client
     try:
         config_msg = await asyncio.wait_for(websocket.receive_json(), timeout=5)
-        voice_id = config_msg.get('voiceId', 'EXAVITQu4vr4xnSDxMaL')  # Default Sarah
+        voice_id = config_msg.get('voiceId', 'EXAVITQu4vr4xnSDxMaL')
         system_prompt = config_msg.get('systemPrompt', 'You are a helpful assistant. Be very concise - respond in 1-2 short sentences max.')
         initial_message = config_msg.get('initialMessage', 'Hello! How can I help you?')
     except:
@@ -89,132 +86,170 @@ async def realtime_conversation(websocket: WebSocket):
     should_stop = False
     transcript_buffer = ""
     
-    async def stream_tts(text: str):
-        """Stream TTS audio chunks to client"""
+    async def stream_tts_websocket(text: str):
+        """Stream TTS using ElevenLabs WebSocket API with PCM output"""
         nonlocal is_speaking
         is_speaking = True
         
         try:
-            # Use ElevenLabs streaming API
-            url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream"
+            uri = f"wss://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream-input?model_id=eleven_turbo_v2"
             
-            async with httpx.AsyncClient() as client:
-                async with client.stream(
-                    "POST",
-                    url,
-                    headers={
-                        "xi-api-key": elevenlabs_key,
-                        "Content-Type": "application/json",
-                        "Accept": "audio/mpeg"
-                    },
-                    json={
-                        "text": text,
-                        "model_id": "eleven_turbo_v2",
-                        "voice_settings": {
-                            "stability": 0.5,
-                            "similarity_boost": 0.75
-                        }
-                    },
-                    timeout=30.0
-                ) as response:
-                    if response.status_code == 200:
-                        async for chunk in response.aiter_bytes(chunk_size=4096):
-                            if should_stop:
-                                break
-                            # Send audio chunk to client
+            async with websockets.connect(uri) as tts_ws:
+                # Send BOS (beginning of stream) with PCM format
+                bos = {
+                    "text": " ",
+                    "output_format": "pcm_24000",
+                    "voice_settings": {"stability": 0.5, "similarity_boost": 0.75},
+                    "xi_api_key": elevenlabs_key
+                }
+                await tts_ws.send(json.dumps(bos))
+                
+                # Send the text
+                await tts_ws.send(json.dumps({
+                    "text": text + " ",
+                    "try_trigger_generation": True
+                }))
+                
+                # Send EOS
+                await tts_ws.send(json.dumps({"text": ""}))
+                
+                # Receive and forward PCM audio chunks
+                async for msg in tts_ws:
+                    if should_stop:
+                        break
+                    try:
+                        data = json.loads(msg)
+                        if "audio" in data and data["audio"]:
+                            # Forward PCM audio directly to client
                             await websocket.send_json({
                                 "type": "audio",
-                                "data": base64.b64encode(chunk).decode('utf-8')
+                                "data": data["audio"],  # Already base64
+                                "format": "pcm_24000"
                             })
-                        # Signal end of audio
-                        await websocket.send_json({"type": "audio_end"})
-                    else:
-                        logger.error(f"TTS error: {response.status_code}")
+                        if data.get("isFinal"):
+                            break
+                    except json.JSONDecodeError:
+                        pass
+                
+                await websocket.send_json({"type": "audio_end"})
+                
         except Exception as e:
-            logger.error(f"TTS streaming error: {e}")
+            logger.error(f"TTS WebSocket error: {e}")
         finally:
             is_speaking = False
     
-    async def get_llm_response_streaming(user_message: str):
-        """Get streaming response from LLM and stream TTS"""
-        nonlocal conversation_history
+    async def stream_llm_to_tts(user_message: str):
+        """Stream LLM response directly to TTS word by word"""
+        nonlocal conversation_history, is_speaking
+        is_speaking = True
         
         conversation_history.append({"role": "user", "content": user_message})
         
         messages = [{"role": "system", "content": system_prompt}]
-        messages.extend(conversation_history[-6:])  # Last 3 exchanges
+        messages.extend(conversation_history[-4:])
         
         full_response = ""
-        sentence_buffer = ""
-        first_sentence_spoken = False
         
         try:
-            async with httpx.AsyncClient() as client:
-                async with client.stream(
-                    "POST",
-                    "https://integrations.emergentagent.com/llm/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {llm_key}",
-                        "Content-Type": "application/json"
-                    },
-                    json={
-                        "model": "gpt-5.2",
-                        "messages": messages,
-                        "max_tokens": 150,
-                        "stream": True
-                    },
-                    timeout=30.0
-                ) as response:
-                    async for line in response.aiter_lines():
-                        if should_stop:
-                            break
-                        if line.startswith("data: "):
-                            data = line[6:]
-                            if data == "[DONE]":
+            # Connect to ElevenLabs WebSocket for streaming TTS
+            uri = f"wss://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream-input?model_id=eleven_turbo_v2"
+            
+            async with websockets.connect(uri) as tts_ws:
+                # Send BOS
+                bos = {
+                    "text": " ",
+                    "output_format": "pcm_24000",
+                    "voice_settings": {"stability": 0.5, "similarity_boost": 0.75},
+                    "xi_api_key": elevenlabs_key
+                }
+                await tts_ws.send(json.dumps(bos))
+                
+                # Task to receive audio and forward to client
+                async def forward_audio():
+                    try:
+                        async for msg in tts_ws:
+                            if should_stop:
                                 break
                             try:
-                                chunk = json.loads(data)
-                                delta = chunk.get("choices", [{}])[0].get("delta", {})
-                                content = delta.get("content", "")
-                                if content:
-                                    full_response += content
-                                    sentence_buffer += content
-                                    
-                                    # Send text to client for display
+                                data = json.loads(msg)
+                                if "audio" in data and data["audio"]:
                                     await websocket.send_json({
-                                        "type": "text",
-                                        "content": content,
-                                        "partial": True
+                                        "type": "audio",
+                                        "data": data["audio"],
+                                        "format": "pcm_24000"
                                     })
-                                    
-                                    # Check if we have a complete sentence
-                                    sentence_end = re.search(r'[.!?]\s*$', sentence_buffer)
-                                    if sentence_end and len(sentence_buffer) > 10:
-                                        # Speak this sentence immediately
-                                        sentence_to_speak = sentence_buffer.strip()
-                                        sentence_buffer = ""
-                                        
-                                        if not first_sentence_spoken:
-                                            first_sentence_spoken = True
-                                            # Don't await - let it stream while we continue
-                                            asyncio.create_task(stream_tts(sentence_to_speak))
-                                        else:
-                                            # Queue subsequent sentences
-                                            asyncio.create_task(stream_tts(sentence_to_speak))
-                            except json.JSONDecodeError:
+                            except:
                                 pass
-                    
-                    # Speak any remaining text
-                    if sentence_buffer.strip() and not should_stop:
-                        await stream_tts(sentence_buffer.strip())
+                    except Exception as e:
+                        logger.error(f"Audio forward error: {e}")
+                
+                # Start audio forwarding task
+                audio_task = asyncio.create_task(forward_audio())
+                
+                # Stream from LLM and send text to TTS
+                async with httpx.AsyncClient() as client:
+                    async with client.stream(
+                        "POST",
+                        "https://integrations.emergentagent.com/llm/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {llm_key}",
+                            "Content-Type": "application/json"
+                        },
+                        json={
+                            "model": "gpt-5.2",
+                            "messages": messages,
+                            "max_tokens": 100,
+                            "stream": True
+                        },
+                        timeout=30.0
+                    ) as response:
+                        word_buffer = ""
+                        
+                        async for line in response.aiter_lines():
+                            if should_stop:
+                                break
+                            if line.startswith("data: "):
+                                data = line[6:]
+                                if data == "[DONE]":
+                                    break
+                                try:
+                                    chunk = json.loads(data)
+                                    content = chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                                    if content:
+                                        full_response += content
+                                        word_buffer += content
+                                        
+                                        # Send to TTS every few words or on punctuation
+                                        if ' ' in word_buffer or any(p in word_buffer for p in '.!?,'):
+                                            await tts_ws.send(json.dumps({
+                                                "text": word_buffer,
+                                                "try_trigger_generation": True
+                                            }))
+                                            word_buffer = ""
+                                except:
+                                    pass
+                        
+                        # Send remaining text
+                        if word_buffer:
+                            await tts_ws.send(json.dumps({
+                                "text": word_buffer,
+                                "try_trigger_generation": True
+                            }))
+                
+                # Send EOS to TTS
+                await tts_ws.send(json.dumps({"text": ""}))
+                
+                # Wait for audio to finish
+                await asyncio.sleep(0.5)
+                audio_task.cancel()
+                
+                await websocket.send_json({"type": "audio_end"})
         
         except Exception as e:
-            logger.error(f"LLM streaming error: {e}")
-            full_response = "Sorry, I had trouble processing that."
-            await stream_tts(full_response)
+            logger.error(f"LLM->TTS streaming error: {e}")
         
         conversation_history.append({"role": "assistant", "content": full_response})
-        await websocket.send_json({"type": "text", "content": "", "partial": False, "full": full_response})
+        is_speaking = False
     
     # Connect to Deepgram
     deepgram_url = "wss://api.deepgram.com/v1/listen"
@@ -224,36 +259,32 @@ async def realtime_conversation(websocket: WebSocket):
             deepgram_url,
             additional_headers={"Authorization": f"Token {deepgram_key}"}
         ) as deepgram_ws:
-            logger.info("Connected to Deepgram for realtime conversation")
+            logger.info("Connected to Deepgram")
             await websocket.send_json({"type": "connected"})
             
             # Play initial greeting
             await websocket.send_json({"type": "status", "status": "speaking"})
-            await stream_tts(initial_message)
+            await stream_tts_websocket(initial_message)
             conversation_history.append({"role": "assistant", "content": initial_message})
             await websocket.send_json({"type": "status", "status": "listening"})
             
             async def handle_deepgram():
-                """Handle Deepgram transcription results"""
+                """Handle transcription - respond FAST"""
                 nonlocal transcript_buffer, should_stop
                 
                 silence_task = None
                 
-                async def process_after_silence():
-                    """Process message after brief silence"""
+                async def respond_now():
+                    """Respond immediately"""
                     nonlocal transcript_buffer
-                    await asyncio.sleep(0.3)  # 300ms silence threshold
+                    await asyncio.sleep(0.2)  # 200ms - ultra fast
                     
                     if transcript_buffer.strip() and not is_speaking:
                         message = transcript_buffer.strip()
                         transcript_buffer = ""
                         
-                        await websocket.send_json({"type": "status", "status": "processing"})
-                        await websocket.send_json({"type": "user_message", "content": message})
-                        
                         await websocket.send_json({"type": "status", "status": "speaking"})
-                        await get_llm_response_streaming(message)
-                        
+                        await stream_llm_to_tts(message)
                         await websocket.send_json({"type": "status", "status": "listening"})
                 
                 try:
@@ -269,83 +300,56 @@ async def realtime_conversation(websocket: WebSocket):
                             is_final = data.get("is_final", False)
                             speech_final = data.get("speech_final", False)
                             
-                            if transcript:
-                                if is_final:
-                                    transcript_buffer += " " + transcript
-                                    await websocket.send_json({
-                                        "type": "transcript",
-                                        "text": transcript_buffer.strip(),
-                                        "final": True
-                                    })
-                                    
-                                    # Cancel previous silence task
-                                    if silence_task:
-                                        silence_task.cancel()
-                                    
-                                    # Start new silence detection
-                                    silence_task = asyncio.create_task(process_after_silence())
-                                else:
-                                    await websocket.send_json({
-                                        "type": "transcript", 
-                                        "text": transcript_buffer + " " + transcript,
-                                        "final": False
-                                    })
+                            if transcript and is_final:
+                                transcript_buffer += " " + transcript
+                                
+                                if silence_task:
+                                    silence_task.cancel()
+                                silence_task = asyncio.create_task(respond_now())
                             
                             if speech_final and transcript_buffer.strip():
                                 if silence_task:
                                     silence_task.cancel()
-                                silence_task = asyncio.create_task(process_after_silence())
+                                asyncio.create_task(respond_now())
                         
                         elif data.get("type") == "UtteranceEnd":
                             if transcript_buffer.strip() and not is_speaking:
                                 if silence_task:
                                     silence_task.cancel()
-                                asyncio.create_task(process_after_silence())
+                                asyncio.create_task(respond_now())
                                 
                 except Exception as e:
                     logger.error(f"Deepgram handler error: {e}")
             
-            async def handle_client_audio():
-                """Forward audio from client to Deepgram"""
+            async def handle_client():
+                """Handle audio from client"""
                 nonlocal should_stop
                 try:
                     while not should_stop:
-                        try:
-                            msg = await websocket.receive()
-                            if msg["type"] == "websocket.receive":
-                                if "bytes" in msg:
-                                    # Don't send audio while AI is speaking
-                                    if not is_speaking:
-                                        await deepgram_ws.send(msg["bytes"])
-                                elif "text" in msg:
-                                    data = json.loads(msg["text"])
-                                    if data.get("type") == "stop":
-                                        should_stop = True
-                                        break
-                        except Exception as e:
-                            if "disconnect" in str(e).lower():
-                                break
-                            raise
+                        msg = await websocket.receive()
+                        if msg["type"] == "websocket.receive":
+                            if "bytes" in msg and not is_speaking:
+                                await deepgram_ws.send(msg["bytes"])
+                            elif "text" in msg:
+                                data = json.loads(msg["text"])
+                                if data.get("type") == "stop":
+                                    should_stop = True
+                                    break
                 except WebSocketDisconnect:
-                    logger.info("Client disconnected")
+                    pass
                 except Exception as e:
-                    logger.error(f"Client audio handler error: {e}")
+                    logger.error(f"Client handler error: {e}")
                 finally:
                     should_stop = True
             
-            # Run handlers concurrently
             await asyncio.gather(
                 handle_deepgram(),
-                handle_client_audio(),
+                handle_client(),
                 return_exceptions=True
             )
     
     except Exception as e:
-        logger.error(f"Realtime conversation error: {e}")
-        try:
-            await websocket.send_json({"type": "error", "message": str(e)})
-        except:
-            pass
+        logger.error(f"Realtime error: {e}")
     finally:
         try:
             await websocket.close()

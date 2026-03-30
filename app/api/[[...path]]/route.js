@@ -2572,7 +2572,7 @@ if (route === '/voices' && method === 'GET') {
       if (!agent) return errorResponse('Agent not found', 404)
       
       // Build messages
-      const systemPrompt = agent.systemPrompt || `You are ${agent.name}. Be concise and conversational.`
+      const systemPrompt = agent.systemPrompt || agent.customPrompt || `You are ${agent.name}. Be concise and conversational.`
       const messages = [{ role: 'system', content: systemPrompt + ' Keep responses brief - 1-2 sentences max.' }]
       
       for (const msg of conversation.slice(-6)) {
@@ -2601,6 +2601,55 @@ if (route === '/voices' && method === 'GET') {
       } catch (e) {
         console.error('Stream error:', e)
         return errorResponse('Failed', 500)
+      }
+    }
+
+    // FAST demo endpoint - minimal latency, short responses
+    if (route === '/demo/fast' && method === 'POST') {
+      if (!user) return errorResponse('Unauthorized', 401)
+      
+      const body = await request.json()
+      const { agentId, message, conversation = [] } = body
+      
+      if (!agentId || !message) return errorResponse('Agent ID and message required')
+      
+      const agent = await db.collection('agents').findOne({ id: agentId, workspaceId: user.workspaceId })
+      if (!agent) return errorResponse('Agent not found', 404)
+      
+      // Ultra-concise system prompt for speed
+      const systemPrompt = agent.customPrompt || agent.systemPrompt || `You are ${agent.name}, a helpful assistant.`
+      const messages = [
+        { role: 'system', content: systemPrompt + ' Reply in 1 short sentence only. Be direct.' }
+      ]
+      
+      // Only include last 2 exchanges for speed
+      for (const msg of conversation.slice(-4)) {
+        messages.push({ role: msg.role, content: msg.content })
+      }
+      messages.push({ role: 'user', content: message })
+      
+      try {
+        const llmResponse = await fetch('https://integrations.emergentagent.com/llm/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${process.env.EMERGENT_LLM_KEY}`
+          },
+          body: JSON.stringify({
+            model: 'gpt-5.2',
+            messages,
+            max_tokens: 60, // Very short for speed
+            temperature: 0.7
+          })
+        })
+        
+        const llmData = await llmResponse.json()
+        const reply = llmData.choices?.[0]?.message?.content || 'Could you repeat that?'
+        
+        return jsonResponse({ reply })
+      } catch (e) {
+        console.error('Fast endpoint error:', e)
+        return jsonResponse({ reply: 'Sorry, please try again.' })
       }
     }
 

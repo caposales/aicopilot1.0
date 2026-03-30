@@ -189,36 +189,39 @@ async def realtime_conversation(websocket: WebSocket):
             
             response_task = None
             last_transcript_time = 0
-            processing_lock = asyncio.Lock()
+            is_processing = False  # Flag to prevent overlapping responses
             
             async def process():
-                nonlocal transcript_buffer, last_transcript_time
+                nonlocal transcript_buffer, last_transcript_time, is_processing
                 
                 # Wait for silence
-                await asyncio.sleep(0.5)  # 500ms
+                await asyncio.sleep(0.5)
                 
-                # Double-check we're not still receiving speech
+                # Don't process if still receiving speech or already processing
                 if time.time() - last_transcript_time < 0.4:
                     return
                 
-                async with processing_lock:
-                    msg = transcript_buffer.strip()
-                    transcript_buffer = ""  # Clear immediately
-                    
-                    if not msg or len(msg.split()) < 3:
-                        return
-                    
-                    if is_speaking or should_stop:
-                        return
-                    
-                    logger.info(f"Processing: {msg}")
-                    try:
-                        await websocket.send_json({"type": "status", "status": "speaking"})
-                        await respond(msg)
-                        if not should_stop:
-                            await websocket.send_json({"type": "status", "status": "listening"})
-                    except:
-                        pass
+                if is_processing or is_speaking:
+                    return
+                
+                msg = transcript_buffer.strip()
+                transcript_buffer = ""
+                
+                if not msg or len(msg.split()) < 3 or should_stop:
+                    return
+                
+                is_processing = True
+                logger.info(f"Processing: {msg}")
+                
+                try:
+                    await websocket.send_json({"type": "status", "status": "speaking"})
+                    await respond(msg)
+                    if not should_stop:
+                        await websocket.send_json({"type": "status", "status": "listening"})
+                except Exception as e:
+                    logger.error(f"Process error: {e}")
+                finally:
+                    is_processing = False
             
             async def handle_dg():
                 nonlocal transcript_buffer, response_task, should_stop, last_transcript_time
@@ -226,8 +229,9 @@ async def realtime_conversation(websocket: WebSocket):
                     async for msg in dg:
                         if should_stop: break
                         
-                        # Ignore while speaking or cooldown
-                        if is_speaking or time.time() < speaking_cooldown:
+                        # Ignore while speaking, processing, or cooldown
+                        if is_speaking or is_processing or time.time() < speaking_cooldown:
+                            transcript_buffer = ""  # Clear any buffered speech
                             continue
                         
                         data = json.loads(msg)
@@ -238,18 +242,9 @@ async def realtime_conversation(websocket: WebSocket):
                                 last_transcript_time = time.time()
                                 logger.info(f"Got: {t}")
                                 
-                                # Cancel any pending response
                                 if response_task and not response_task.done(): 
                                     response_task.cancel()
-                                
-                                # Check if sentence is complete (ends with punctuation)
-                                stripped = transcript_buffer.strip()
-                                if stripped and stripped[-1] in '.?!':
-                                    # Respond immediately - sentence is complete
-                                    response_task = asyncio.create_task(process())
-                                else:
-                                    # Wait for more input
-                                    response_task = asyncio.create_task(process())
+                                response_task = asyncio.create_task(process())
                 except Exception as e:
                     logger.error(f"DG error: {e}")
             

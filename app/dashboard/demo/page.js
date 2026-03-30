@@ -42,8 +42,14 @@ export default function AgentDemoPage() {
     if (deepgramSocketRef.current) {
       try { deepgramSocketRef.current.close() } catch(e) {}
     }
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      try { mediaRecorderRef.current.stop() } catch(e) {}
+    if (mediaRecorderRef.current) {
+      // Could be MediaRecorder or SpeechRecognition
+      if (mediaRecorderRef.current.stop) {
+        try { mediaRecorderRef.current.stop() } catch(e) {}
+      }
+      if (mediaRecorderRef.current.abort) {
+        try { mediaRecorderRef.current.abort() } catch(e) {}
+      }
     }
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop())
@@ -108,37 +114,147 @@ export default function AgentDemoPage() {
   }
 
   const connectToDeepgram = async (stream) => {
-    const tokenRes = await fetch('/api/demo/deepgram-token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }
+    try {
+      const tokenRes = await fetch('/api/demo/deepgram-token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }
+      })
+      
+      if (!tokenRes.ok) {
+        throw new Error('Failed to get Deepgram token')
+      }
+      
+      const { token } = await tokenRes.json()
+      console.log('Got Deepgram token, connecting to WebSocket...')
+      
+      // Aggressive endpointing for fast response
+      const wsUrl = `wss://api.deepgram.com/v1/listen?model=nova-2&punctuate=true&interim_results=true&endpointing=200&utterance_end_ms=500`
+      
+      const ws = new WebSocket(wsUrl, ['token', token])
+      deepgramSocketRef.current = ws
+      
+      // Set a connection timeout
+      const connectionTimeout = setTimeout(() => {
+        if (ws.readyState !== WebSocket.OPEN) {
+          console.error('WebSocket connection timeout')
+          ws.close()
+          toast.error('Connection timeout - trying fallback mode')
+          // Use browser speech recognition as fallback
+          useBrowserSpeechRecognition(stream)
+        }
+      }, 5000)
+      
+      ws.onopen = () => {
+        clearTimeout(connectionTimeout)
+        console.log('Deepgram WebSocket connected!')
+        setStatus('speaking')
+        playGreeting().then(() => startAudioStreaming(stream, ws))
+      }
+      
+      ws.onmessage = (event) => handleDeepgramMessage(event.data)
+      
+      ws.onerror = (error) => {
+        clearTimeout(connectionTimeout)
+        console.error('Deepgram WebSocket error:', error)
+        // Try fallback
+        toast.error('Deepgram error - using browser speech recognition')
+        useBrowserSpeechRecognition(stream)
+      }
+      
+      ws.onclose = (event) => {
+        clearTimeout(connectionTimeout)
+        console.log('Deepgram closed:', event.code, event.reason)
+        if (event.code === 1008) {
+          // Policy violation - likely auth issue
+          console.error('Auth rejected by Deepgram')
+          toast.error('Deepgram auth failed - using fallback')
+          useBrowserSpeechRecognition(stream)
+        }
+      }
+    } catch (e) {
+      console.error('Deepgram setup error:', e)
+      toast.error('Setup error - using browser speech recognition')
+      useBrowserSpeechRecognition(stream)
+    }
+  }
+
+  // Fallback: Use browser's built-in speech recognition
+  const useBrowserSpeechRecognition = (stream) => {
+    if (!('webkitSpeechRecognition' in window || 'SpeechRecognition' in window)) {
+      toast.error('Speech recognition not supported in this browser')
+      cleanup()
+      setIsCallActive(false)
+      setStatus('idle')
+      return
+    }
+
+    console.log('Using browser speech recognition as fallback')
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
+    const recognition = new SpeechRecognition()
+    
+    recognition.continuous = true
+    recognition.interimResults = true
+    recognition.lang = 'en-US'
+    
+    let finalTranscript = ''
+    let silenceTimeout = null
+    
+    recognition.onresult = (event) => {
+      let interim = ''
+      
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        if (event.results[i].isFinal) {
+          finalTranscript += event.results[i][0].transcript + ' '
+        } else {
+          interim += event.results[i][0].transcript
+        }
+      }
+      
+      setTranscript(finalTranscript + interim)
+      
+      // Clear existing timeout
+      if (silenceTimeout) clearTimeout(silenceTimeout)
+      
+      // Process after 600ms of silence
+      if (finalTranscript.trim()) {
+        silenceTimeout = setTimeout(() => {
+          if (finalTranscript.trim() && !isProcessingRef.current) {
+            const message = finalTranscript.trim()
+            finalTranscript = ''
+            setTranscript('')
+            recognition.stop()
+            processMessage(message).then(() => {
+              if (statusRef.current !== 'idle') {
+                try { recognition.start() } catch(e) {}
+              }
+            })
+          }
+        }, 600)
+      }
+    }
+    
+    recognition.onerror = (e) => {
+      console.log('Speech recognition error:', e.error)
+      if (e.error === 'no-speech' && statusRef.current === 'listening') {
+        try { recognition.start() } catch(err) {}
+      }
+    }
+    
+    recognition.onend = () => {
+      if (statusRef.current === 'listening') {
+        try { recognition.start() } catch(e) {}
+      }
+    }
+    
+    // Store reference for cleanup
+    mediaRecorderRef.current = recognition
+    
+    // Play greeting then start listening
+    setStatus('speaking')
+    playGreeting().then(() => {
+      setStatus('listening')
+      recognition.start()
     })
-    
-    if (!tokenRes.ok) throw new Error('Failed to get Deepgram token')
-    
-    const { token } = await tokenRes.json()
-    
-    // Aggressive endpointing for fast response
-    const wsUrl = `wss://api.deepgram.com/v1/listen?model=nova-2&punctuate=true&interim_results=true&endpointing=200&utterance_end_ms=500`
-    
-    const ws = new WebSocket(wsUrl, ['token', token])
-    deepgramSocketRef.current = ws
-    
-    ws.onopen = () => {
-      console.log('Deepgram connected')
-      setStatus('speaking')
-      playGreeting().then(() => startAudioStreaming(stream, ws))
-    }
-    
-    ws.onmessage = (event) => handleDeepgramMessage(event.data)
-    
-    ws.onerror = (error) => {
-      console.error('Deepgram error:', error)
-      toast.error('Connection error')
-    }
-    
-    ws.onclose = (event) => {
-      console.log('Deepgram closed:', event.code)
-    }
   }
 
   const playGreeting = async () => {

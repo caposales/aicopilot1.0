@@ -10,6 +10,7 @@ import asyncio
 import websockets
 import json
 import base64
+import time
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -65,17 +66,15 @@ async def realtime_conversation(websocket: WebSocket):
         system_prompt = 'You are helpful. Reply in 1 short sentence.'
         initial_message = 'Hello!'
     
-    # State - use a lock to prevent race conditions
+    # State
     state = {
         'is_speaking': False,
         'should_stop': False,
         'transcript_buffer': '',
         'conversation': [],
-        'cooldown_until': 0  # Timestamp until we ignore input
+        'cooldown_until': 0
     }
     state_lock = asyncio.Lock()
-    
-    import time
     
     async def stream_tts(text: str):
         """Stream TTS - blocks until complete"""

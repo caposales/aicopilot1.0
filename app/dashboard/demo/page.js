@@ -24,11 +24,16 @@ export default function AgentDemoPage() {
   const mediaRecorderRef = useRef(null)
   const streamRef = useRef(null)
   const callTimerRef = useRef(null)
-  const audioContextRef = useRef(null)
   const currentAudioRef = useRef(null)
   const isProcessingRef = useRef(false)
   const transcriptBufferRef = useRef('')
   const silenceTimeoutRef = useRef(null)
+  const statusRef = useRef('idle') // Mirror status in ref for callbacks
+
+  // Keep statusRef in sync
+  useEffect(() => {
+    statusRef.current = status
+  }, [status])
 
   useEffect(() => {
     fetchAgents()
@@ -46,9 +51,6 @@ export default function AgentDemoPage() {
     }
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop())
-    }
-    if (audioContextRef.current) {
-      audioContextRef.current.close().catch(() => {})
     }
     if (currentAudioRef.current) {
       currentAudioRef.current.pause()
@@ -89,15 +91,13 @@ export default function AgentDemoPage() {
       // Get microphone access
       const stream = await navigator.mediaDevices.getUserMedia({ 
         audio: {
+          channelCount: 1,
           sampleRate: 16000,
           echoCancellation: true,
           noiseSuppression: true
         }
       })
       streamRef.current = stream
-      
-      // Initialize audio context for playback
-      audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)()
       
       setIsCallActive(true)
       setConversation([])
@@ -133,17 +133,17 @@ export default function AgentDemoPage() {
       }
       
       const { token } = await tokenRes.json()
+      console.log('Got Deepgram token, connecting...')
       
-      // Connect directly to Deepgram WebSocket using the token as API key
-      // Using query parameter for auth since the API key may not work with Sec-WebSocket-Protocol
-      const wsUrl = `wss://api.deepgram.com/v1/listen?encoding=linear16&sample_rate=16000&channels=1&interim_results=true&punctuate=true&endpointing=300`
+      // Connect to Deepgram WebSocket
+      // Use audio/webm encoding since MediaRecorder outputs webm
+      const wsUrl = `wss://api.deepgram.com/v1/listen?model=nova-2&punctuate=true&interim_results=true&endpointing=300&vad_events=true`
       
-      // Create WebSocket with Authorization in subprotocol
       const ws = new WebSocket(wsUrl, ['token', token])
       deepgramSocketRef.current = ws
       
       ws.onopen = () => {
-        console.log('Connected to Deepgram')
+        console.log('Connected to Deepgram WebSocket')
         setStatus('speaking')
         
         // Play greeting first
@@ -159,16 +159,13 @@ export default function AgentDemoPage() {
       
       ws.onerror = (error) => {
         console.error('Deepgram WebSocket error:', error)
-        setError('Connection error - check Deepgram API key')
+        setError('Connection error - check console for details')
       }
       
       ws.onclose = (event) => {
         console.log('Deepgram WebSocket closed:', event.code, event.reason)
-        if (isCallActive) {
-          // Unexpected close - try to reconnect or end call
-          if (event.code !== 1000) {
-            setError('Connection lost')
-          }
+        if (event.code !== 1000 && statusRef.current !== 'idle') {
+          setError(`Connection closed: ${event.reason || 'Unknown reason'}`)
         }
       }
       
@@ -205,94 +202,110 @@ export default function AgentDemoPage() {
 
   const startAudioStreaming = (stream, ws) => {
     setStatus('listening')
+    console.log('Starting audio streaming to Deepgram...')
     
-    // Create MediaRecorder to capture audio
-    const mediaRecorder = new MediaRecorder(stream, {
-      mimeType: MediaRecorder.isTypeSupported('audio/webm;codecs=opus') 
-        ? 'audio/webm;codecs=opus' 
-        : 'audio/webm'
-    })
+    // Use MediaRecorder for audio capture - simpler and more reliable
+    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') 
+      ? 'audio/webm;codecs=opus' 
+      : MediaRecorder.isTypeSupported('audio/webm')
+        ? 'audio/webm'
+        : 'audio/mp4'
     
+    console.log('Using mime type:', mimeType)
+    
+    const mediaRecorder = new MediaRecorder(stream, { mimeType })
     mediaRecorderRef.current = mediaRecorder
     
-    // Also set up audio worklet for raw PCM streaming (more reliable for Deepgram)
-    const audioContext = audioContextRef.current
-    const source = audioContext.createMediaStreamSource(stream)
-    
-    // Use ScriptProcessor for PCM extraction (deprecated but widely supported)
-    const processor = audioContext.createScriptProcessor(4096, 1, 1)
-    
-    processor.onaudioprocess = (e) => {
-      if (ws.readyState !== WebSocket.OPEN) return
-      if (status === 'speaking' || isProcessingRef.current) return
-      
-      const inputData = e.inputBuffer.getChannelData(0)
-      
-      // Convert Float32 to Int16
-      const pcmData = new Int16Array(inputData.length)
-      for (let i = 0; i < inputData.length; i++) {
-        const s = Math.max(-1, Math.min(1, inputData[i]))
-        pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7FFF
+    mediaRecorder.ondataavailable = async (event) => {
+      if (event.data.size > 0 && ws.readyState === WebSocket.OPEN) {
+        // Don't send while speaking or processing
+        if (statusRef.current === 'speaking' || isProcessingRef.current) {
+          return
+        }
+        
+        // Send audio data to Deepgram
+        const arrayBuffer = await event.data.arrayBuffer()
+        ws.send(arrayBuffer)
       }
-      
-      // Send PCM data to Deepgram
-      ws.send(pcmData.buffer)
     }
     
-    source.connect(processor)
-    processor.connect(audioContext.destination)
+    mediaRecorder.onerror = (e) => {
+      console.error('MediaRecorder error:', e)
+    }
+    
+    // Request data every 250ms for low latency
+    mediaRecorder.start(250)
+    console.log('MediaRecorder started, sending audio chunks every 250ms')
   }
 
   const handleDeepgramMessage = (data) => {
     try {
       const result = JSON.parse(data)
       
-      if (result.channel?.alternatives?.[0]) {
-        const transcript = result.channel.alternatives[0].transcript
-        const isFinal = result.is_final
-        const speechFinal = result.speech_final
-        
-        if (transcript) {
-          if (isFinal) {
-            // Accumulate final transcripts
-            transcriptBufferRef.current += (transcriptBufferRef.current ? ' ' : '') + transcript
-            setTranscript(transcriptBufferRef.current)
-            
-            // Clear any existing silence timeout
+      // Handle different message types
+      if (result.type === 'Results') {
+        const alt = result.channel?.alternatives?.[0]
+        if (alt) {
+          const transcript = alt.transcript
+          const isFinal = result.is_final
+          const speechFinal = result.speech_final
+          
+          console.log('Deepgram result:', { transcript, isFinal, speechFinal })
+          
+          if (transcript) {
+            if (isFinal) {
+              // Accumulate final transcripts
+              transcriptBufferRef.current += (transcriptBufferRef.current ? ' ' : '') + transcript
+              setTranscript(transcriptBufferRef.current)
+              
+              // Clear any existing silence timeout
+              if (silenceTimeoutRef.current) {
+                clearTimeout(silenceTimeoutRef.current)
+              }
+              
+              // Set timeout to process after brief pause
+              silenceTimeoutRef.current = setTimeout(() => {
+                if (transcriptBufferRef.current.trim() && !isProcessingRef.current) {
+                  processUserMessage(transcriptBufferRef.current.trim())
+                  transcriptBufferRef.current = ''
+                  setTranscript('')
+                }
+              }, 1000) // 1s silence = user finished
+              
+            } else {
+              // Show interim transcript
+              setTranscript(transcriptBufferRef.current + (transcriptBufferRef.current ? ' ' : '') + transcript)
+            }
+          }
+          
+          // Speech final means Deepgram detected end of utterance
+          if (speechFinal && transcriptBufferRef.current.trim()) {
+            console.log('Speech final detected, processing...')
             if (silenceTimeoutRef.current) {
               clearTimeout(silenceTimeoutRef.current)
             }
             
-            // Set timeout to process after brief pause (user finished speaking)
-            silenceTimeoutRef.current = setTimeout(() => {
-              if (transcriptBufferRef.current.trim() && !isProcessingRef.current) {
-                processUserMessage(transcriptBufferRef.current.trim())
-                transcriptBufferRef.current = ''
-                setTranscript('')
-              }
-            }, 800) // 800ms silence = user finished
-            
-          } else {
-            // Show interim transcript
-            setTranscript(transcriptBufferRef.current + (transcriptBufferRef.current ? ' ' : '') + transcript)
+            if (!isProcessingRef.current) {
+              const message = transcriptBufferRef.current.trim()
+              transcriptBufferRef.current = ''
+              setTranscript('')
+              processUserMessage(message)
+            }
           }
         }
-        
-        // Speech final means Deepgram detected end of utterance
-        if (speechFinal && transcriptBufferRef.current.trim()) {
-          if (silenceTimeoutRef.current) {
-            clearTimeout(silenceTimeoutRef.current)
-          }
-          
-          if (!isProcessingRef.current) {
-            processUserMessage(transcriptBufferRef.current.trim())
-            transcriptBufferRef.current = ''
-            setTranscript('')
-          }
+      } else if (result.type === 'SpeechStarted') {
+        console.log('Speech started detected')
+      } else if (result.type === 'UtteranceEnd') {
+        console.log('Utterance end detected')
+        if (transcriptBufferRef.current.trim() && !isProcessingRef.current) {
+          const message = transcriptBufferRef.current.trim()
+          transcriptBufferRef.current = ''
+          setTranscript('')
+          processUserMessage(message)
         }
       }
     } catch (e) {
-      console.error('Error parsing Deepgram message:', e)
+      console.error('Error parsing Deepgram message:', e, data)
     }
   }
 
@@ -300,6 +313,7 @@ export default function AgentDemoPage() {
     if (isProcessingRef.current) return
     isProcessingRef.current = true
     
+    console.log('Processing user message:', message)
     setStatus('processing')
     setConversation(prev => [...prev, { role: 'user', content: message }])
     
@@ -322,6 +336,7 @@ export default function AgentDemoPage() {
       }
       
       const reply = data.reply
+      console.log('AI reply:', reply)
       setConversation(prev => [...prev, { role: 'assistant', content: reply }])
       
       // Speak the response
@@ -343,16 +358,12 @@ export default function AgentDemoPage() {
       }
       
       // Resume listening
-      if (isCallActive) {
-        setStatus('listening')
-      }
+      setStatus('listening')
       
     } catch (e) {
       console.error('Process error:', e)
       toast.error('Error processing message')
-      if (isCallActive) {
-        setStatus('listening')
-      }
+      setStatus('listening')
     } finally {
       isProcessingRef.current = false
     }
@@ -446,7 +457,7 @@ export default function AgentDemoPage() {
                 data-testid={`agent-card-${agent.id}`}
               >
                 <p className="font-medium">{agent.name}</p>
-                <p className="text-xs text-muted-foreground">{agent.voiceId ? 'ElevenLabs Voice' : 'Default Voice'}</p>
+                <p className="text-xs text-muted-foreground">{agent.voiceId ? 'ElevenLabs Voice' : 'Browser Voice'}</p>
               </div>
             ))}
           </CardContent>

@@ -197,7 +197,7 @@ async def realtime_conversation(websocket: WebSocket):
             stop_speaking = False  # Flag to stop TTS mid-speech
             
             async def process():
-                nonlocal transcript_buffer, last_transcript_time, interrupt_buffer, processing_lock, pending_process
+                nonlocal transcript_buffer, last_transcript_time, processing_lock, pending_process
                 
                 # Wait 1s for user to finish speaking
                 await asyncio.sleep(1.0)
@@ -224,13 +224,6 @@ async def realtime_conversation(websocket: WebSocket):
                 try:
                     await websocket.send_json({"type": "status", "status": "speaking"})
                     await respond(msg)
-                    
-                    # After speaking, if there was an interrupt, add it to buffer for next turn
-                    if interrupt_buffer.strip():
-                        logger.info(f"Had interrupt: {interrupt_buffer}")
-                        transcript_buffer = interrupt_buffer
-                        interrupt_buffer = ""
-                    
                     if not should_stop:
                         await websocket.send_json({"type": "status", "status": "listening"})
                 except Exception as e:
@@ -252,17 +245,16 @@ async def realtime_conversation(websocket: WebSocket):
                                 last_transcript_time = time.time()
                                 logger.info(f"Got: {t}")
                                 
+                                # If AI is speaking/processing, ignore (don't even buffer)
                                 if is_speaking or processing_lock:
-                                    # User is interrupting - stop AI and collect their speech
-                                    interrupt_buffer += " " + t
-                                    stop_speaking = True  # Signal to stop TTS
-                                    logger.info(f"INTERRUPT - stopping AI: {t}")
-                                else:
-                                    transcript_buffer += " " + t
-                                    # Cancel any pending process and start fresh timer
-                                    if pending_process and not pending_process.done(): 
-                                        pending_process.cancel()
-                                    pending_process = asyncio.create_task(process())
+                                    logger.info(f"Ignoring (AI busy): {t}")
+                                    continue
+                                
+                                transcript_buffer += " " + t
+                                # Cancel any pending process and start fresh timer
+                                if pending_process and not pending_process.done(): 
+                                    pending_process.cancel()
+                                pending_process = asyncio.create_task(process())
                                 
                 except Exception as e:
                     logger.error(f"DG error: {e}")

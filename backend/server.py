@@ -175,7 +175,7 @@ async def realtime_conversation(websocket: WebSocket):
     
     try:
         async with websockets.connect(
-            "wss://api.deepgram.com/v1/listen?punctuate=true&utterance_end_ms=1500&vad_events=true",
+            "wss://api.deepgram.com/v1/listen",
             additional_headers={"Authorization": f"Token {deepgram_key}"}
         ) as dg:
             logger.info("Connected to Deepgram")
@@ -194,6 +194,13 @@ async def realtime_conversation(websocket: WebSocket):
             
             async def process():
                 nonlocal transcript_buffer, last_transcript_time, interrupt_buffer, processing_lock
+                
+                # Wait 1.5s for user to finish speaking
+                await asyncio.sleep(1.5)
+                
+                # If new speech came in, abort - a new process() will handle it
+                if time.time() - last_transcript_time < 1.3:
+                    return
                 
                 # Prevent multiple simultaneous responses
                 if processing_lock or is_speaking:
@@ -237,7 +244,6 @@ async def realtime_conversation(websocket: WebSocket):
                         
                         data = json.loads(msg)
                         
-                        # Collect transcripts but don't process yet
                         if data.get("type") == "Results":
                             t = data.get("channel", {}).get("alternatives", [{}])[0].get("transcript", "")
                             if t and data.get("is_final"):
@@ -249,14 +255,10 @@ async def realtime_conversation(websocket: WebSocket):
                                     logger.info(f"Interrupt collected: {t}")
                                 else:
                                     transcript_buffer += " " + t
-                        
-                        # UtteranceEnd = user stopped speaking, NOW process
-                        elif data.get("type") == "UtteranceEnd":
-                            logger.info("UtteranceEnd detected")
-                            if not is_speaking and transcript_buffer.strip():
-                                if response_task and not response_task.done(): 
-                                    response_task.cancel()
-                                response_task = asyncio.create_task(process())
+                                    # Reset the timer each time we get new speech
+                                    if response_task and not response_task.done(): 
+                                        response_task.cancel()
+                                    response_task = asyncio.create_task(process())
                                 
                 except Exception as e:
                     logger.error(f"DG error: {e}")

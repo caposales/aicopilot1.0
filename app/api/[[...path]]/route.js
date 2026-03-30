@@ -2179,7 +2179,8 @@ if (route === '/voices' && method === 'GET') {
     if (route === '/analytics' && method === 'GET') {
       if (!user) return errorResponse('Unauthorized', 401)
       
-      const range = url.searchParams.get('range') || '7d'
+      const requestUrl = new URL(request.url)
+      const range = requestUrl.searchParams.get('range') || '7d'
       const days = range === '24h' ? 1 : range === '7d' ? 7 : range === '30d' ? 30 : 90
       const startDate = new Date()
       startDate.setDate(startDate.getDate() - days)

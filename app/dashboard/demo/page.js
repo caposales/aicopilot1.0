@@ -540,7 +540,12 @@ export default function AgentDemoPage() {
           </CardHeader>
           <CardContent className="space-y-2">
             {agents.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No agents created yet. Create an agent first.</p>
+              <div className="text-center py-4">
+                <p className="text-sm text-muted-foreground mb-2">No agents created yet.</p>
+                <Button variant="outline" size="sm" onClick={() => window.location.href = '/dashboard/agents/inbound'}>
+                  Create an Agent First
+                </Button>
+              </div>
             ) : (
               agents.map((agent) => (
                 <div

@@ -184,7 +184,7 @@ async def realtime_conversation(websocket: WebSocket):
             
             async def process():
                 nonlocal transcript_buffer
-                await asyncio.sleep(0.05)  # 50ms - ultra fast
+                await asyncio.sleep(0.6)  # 600ms - wait for full thought
                 msg = transcript_buffer.strip()
                 transcript_buffer = ""
                 if len(msg) >= 3 and not is_speaking:

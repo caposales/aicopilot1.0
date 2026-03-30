@@ -66,7 +66,6 @@ async def realtime_conversation(websocket: WebSocket):
     should_stop = False
     transcript_buffer = ""
     conversation = []
-    stop_speaking = False  # Flag to interrupt TTS
     
     async def speak(text):
         nonlocal is_speaking
@@ -102,9 +101,8 @@ async def realtime_conversation(websocket: WebSocket):
             is_speaking = False
     
     async def respond(user_msg):
-        nonlocal is_speaking, conversation, stop_speaking
+        nonlocal is_speaking, conversation
         is_speaking = True
-        stop_speaking = False  # Reset flag
         conversation.append({"role": "user", "content": user_msg})
         
         messages = [{"role": "system", "content": system_prompt}] + conversation[-4:]
@@ -124,8 +122,7 @@ async def realtime_conversation(websocket: WebSocket):
                 async def forward():
                     try:
                         async for msg in tts:
-                            if should_stop or stop_speaking: 
-                                logger.info("Stopping TTS - user interrupted")
+                            if should_stop: 
                                 break
                             try:
                                 d = json.loads(msg)
@@ -149,7 +146,7 @@ async def realtime_conversation(websocket: WebSocket):
                     ) as resp:
                         buf = ""
                         async for line in resp.aiter_lines():
-                            if should_stop or stop_speaking: break
+                            if should_stop: break
                             if line.startswith("data: ") and "[DONE]" not in line:
                                 try:
                                     c = json.loads(line[6:]).get("choices", [{}])[0].get("delta", {}).get("content", "")
@@ -160,12 +157,17 @@ async def realtime_conversation(websocket: WebSocket):
                                             await tts.send(json.dumps({"text": buf, "try_trigger_generation": True}))
                                             buf = ""
                                 except: pass
-                        if buf and not stop_speaking:
+                        if buf:
                             await tts.send(json.dumps({"text": buf, "try_trigger_generation": True}))
                 
                 await tts.send(json.dumps({"text": ""}))
-                await asyncio.sleep(0.3)
-                audio_task.cancel()
+                
+                # Wait for audio to finish playing
+                try:
+                    await asyncio.wait_for(audio_task, timeout=10.0)
+                except asyncio.TimeoutError:
+                    audio_task.cancel()
+                
                 await websocket.send_json({"type": "audio_end"})
         except Exception as e:
             logger.error(f"Respond error: {e}")
@@ -191,10 +193,8 @@ async def realtime_conversation(websocket: WebSocket):
             
             response_task = None
             last_transcript_time = 0
-            interrupt_buffer = ""
             processing_lock = False
             pending_process = None
-            stop_speaking = False  # Flag to stop TTS mid-speech
             
             async def process():
                 nonlocal transcript_buffer, last_transcript_time, processing_lock, pending_process
@@ -232,7 +232,7 @@ async def realtime_conversation(websocket: WebSocket):
                     processing_lock = False
             
             async def handle_dg():
-                nonlocal transcript_buffer, response_task, should_stop, last_transcript_time, interrupt_buffer, pending_process, stop_speaking
+                nonlocal transcript_buffer, response_task, should_stop, last_transcript_time, pending_process
                 try:
                     async for msg in dg:
                         if should_stop: break

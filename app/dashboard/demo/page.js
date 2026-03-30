@@ -11,25 +11,19 @@ export default function AgentDemoPage() {
   const [isLoading, setIsLoading] = useState(true)
   
   const [isCallActive, setIsCallActive] = useState(false)
-  const [status, setStatus] = useState('idle')
+  const [status, setStatus] = useState('idle') // idle, connecting, listening, processing, speaking
   const [transcript, setTranscript] = useState('')
+  const [aiText, setAiText] = useState('')
   const [callDuration, setCallDuration] = useState(0)
 
   // Refs
-  const deepgramSocketRef = useRef(null)
+  const wsRef = useRef(null)
   const mediaRecorderRef = useRef(null)
   const streamRef = useRef(null)
   const callTimerRef = useRef(null)
-  const currentAudioRef = useRef(null)
-  const isProcessingRef = useRef(false)
-  const transcriptBufferRef = useRef('')
-  const silenceTimeoutRef = useRef(null)
-  const statusRef = useRef('idle')
-  const conversationRef = useRef([])
-
-  useEffect(() => {
-    statusRef.current = status
-  }, [status])
+  const audioContextRef = useRef(null)
+  const audioQueueRef = useRef([])
+  const isPlayingRef = useRef(false)
 
   useEffect(() => {
     fetchAgents()
@@ -38,32 +32,23 @@ export default function AgentDemoPage() {
 
   const cleanup = useCallback(() => {
     if (callTimerRef.current) clearInterval(callTimerRef.current)
-    if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current)
-    if (deepgramSocketRef.current) {
-      try { deepgramSocketRef.current.close() } catch(e) {}
+    if (wsRef.current) {
+      try { 
+        wsRef.current.send(JSON.stringify({ type: 'stop' }))
+        wsRef.current.close() 
+      } catch(e) {}
     }
-    if (mediaRecorderRef.current) {
-      // Could be MediaRecorder or SpeechRecognition
-      if (mediaRecorderRef.current.stop) {
-        try { mediaRecorderRef.current.stop() } catch(e) {}
-      }
-      if (mediaRecorderRef.current.abort) {
-        try { mediaRecorderRef.current.abort() } catch(e) {}
-      }
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      try { mediaRecorderRef.current.stop() } catch(e) {}
     }
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop())
     }
-    if (currentAudioRef.current) {
-      currentAudioRef.current.pause()
-      currentAudioRef.current = null
+    if (audioContextRef.current) {
+      audioContextRef.current.close().catch(() => {})
     }
-    if (window.speechSynthesis) {
-      window.speechSynthesis.cancel()
-    }
-    isProcessingRef.current = false
-    transcriptBufferRef.current = ''
-    conversationRef.current = []
+    audioQueueRef.current = []
+    isPlayingRef.current = false
   }, [])
 
   const getAuthHeaders = () => {
@@ -91,18 +76,25 @@ export default function AgentDemoPage() {
     }
 
     setStatus('connecting')
+    setTranscript('')
+    setAiText('')
     
     try {
+      // Get microphone access
       const stream = await navigator.mediaDevices.getUserMedia({ 
         audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }
       })
       streamRef.current = stream
       
+      // Initialize audio context for playback
+      audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)()
+      
       setIsCallActive(true)
       setCallDuration(0)
       callTimerRef.current = setInterval(() => setCallDuration(p => p + 1), 1000)
       
-      await connectToDeepgram(stream)
+      // Connect to real-time streaming endpoint
+      await connectRealtime(stream)
       
     } catch (e) {
       console.error('Failed to start call:', e)
@@ -113,174 +105,92 @@ export default function AgentDemoPage() {
     }
   }
 
-  const connectToDeepgram = async (stream) => {
-    try {
-      console.log('Connecting to Deepgram via backend proxy...')
-      
-      // Connect through our backend WebSocket proxy
-      const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-      const wsHost = window.location.host
-      const wsUrl = `${wsProtocol}//${wsHost}/api/ws/deepgram`
-      
-      console.log('WebSocket URL:', wsUrl)
-      const ws = new WebSocket(wsUrl)
-      deepgramSocketRef.current = ws
-      
-      // Set a connection timeout
-      const connectionTimeout = setTimeout(() => {
-        if (ws.readyState !== WebSocket.OPEN) {
-          console.error('WebSocket connection timeout - readyState:', ws.readyState)
-          ws.close()
-          toast.error('Deepgram connection timeout - using browser fallback')
-          useBrowserSpeechRecognition(stream)
-        }
-      }, 10000)
-      
-      ws.onopen = () => {
-        console.log('WebSocket opened, waiting for Deepgram connection...')
-      }
-      
-      ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data)
-          
-          // Check for connection confirmation
-          if (data.type === 'connected') {
-            clearTimeout(connectionTimeout)
-            console.log('Deepgram connected via proxy!')
-            toast.success('Connected to Deepgram')
-            setStatus('speaking')
-            playGreeting().then(() => startAudioStreaming(stream, ws))
-            return
-          }
-          
-          // Check for errors
-          if (data.error) {
-            console.error('Deepgram error:', data.error)
-            clearTimeout(connectionTimeout)
-            toast.error('Deepgram error - using browser fallback')
-            useBrowserSpeechRecognition(stream)
-            return
-          }
-          
-          // Handle transcription results
-          handleDeepgramMessage(event.data)
-        } catch (e) {
-          // Not JSON, might be binary or raw message
-          handleDeepgramMessage(event.data)
-        }
-      }
-      
-      ws.onerror = (error) => {
-        clearTimeout(connectionTimeout)
-        console.error('WebSocket error event:', error)
-      }
-      
-      ws.onclose = (event) => {
-        clearTimeout(connectionTimeout)
-        console.log('WebSocket closed - code:', event.code, 'reason:', event.reason)
+  const connectRealtime = async (stream) => {
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const wsHost = window.location.host
+    const wsUrl = `${wsProtocol}//${wsHost}/api/ws/realtime`
+    
+    console.log('Connecting to realtime endpoint:', wsUrl)
+    const ws = new WebSocket(wsUrl)
+    wsRef.current = ws
+    
+    ws.onopen = () => {
+      console.log('WebSocket opened, sending config...')
+      // Send agent config
+      ws.send(JSON.stringify({
+        voiceId: selectedAgent.voiceId || 'EXAVITQu4vr4xnSDxMaL',
+        systemPrompt: selectedAgent.customPrompt || selectedAgent.systemPrompt || 'You are a helpful assistant. Be concise.',
+        initialMessage: selectedAgent.initialMessage || 'Hello! How can I help you?'
+      }))
+    }
+    
+    ws.onmessage = async (event) => {
+      try {
+        const data = JSON.parse(event.data)
         
-        if (statusRef.current !== 'idle' && event.code !== 1000) {
-          console.error('Connection failed, using browser fallback')
-          toast.error('Connection lost - using browser')
-          useBrowserSpeechRecognition(stream)
-        }
-      }
-    } catch (e) {
-      console.error('Connection setup error:', e)
-      toast.error('Setup error - using browser speech recognition')
-      useBrowserSpeechRecognition(stream)
-    }
-  }
-
-  // Fallback: Use browser's built-in speech recognition
-  const useBrowserSpeechRecognition = (stream) => {
-    if (!('webkitSpeechRecognition' in window || 'SpeechRecognition' in window)) {
-      toast.error('Speech recognition not supported in this browser')
-      cleanup()
-      setIsCallActive(false)
-      setStatus('idle')
-      return
-    }
-
-    console.log('Using browser speech recognition as fallback')
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
-    const recognition = new SpeechRecognition()
-    
-    recognition.continuous = true
-    recognition.interimResults = true
-    recognition.lang = 'en-US'
-    
-    let finalTranscript = ''
-    let silenceTimeout = null
-    
-    recognition.onresult = (event) => {
-      let interim = ''
-      
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        if (event.results[i].isFinal) {
-          finalTranscript += event.results[i][0].transcript + ' '
-        } else {
-          interim += event.results[i][0].transcript
-        }
-      }
-      
-      setTranscript(finalTranscript + interim)
-      
-      // Clear existing timeout
-      if (silenceTimeout) clearTimeout(silenceTimeout)
-      
-      // Process after 600ms of silence
-      if (finalTranscript.trim()) {
-        silenceTimeout = setTimeout(() => {
-          if (finalTranscript.trim() && !isProcessingRef.current) {
-            const message = finalTranscript.trim()
-            finalTranscript = ''
+        switch (data.type) {
+          case 'connected':
+            console.log('Connected to realtime service')
+            toast.success('Connected!')
+            startAudioStreaming(stream, ws)
+            break
+            
+          case 'status':
+            setStatus(data.status)
+            break
+            
+          case 'transcript':
+            setTranscript(data.text)
+            break
+            
+          case 'user_message':
+            console.log('User said:', data.content)
             setTranscript('')
-            recognition.stop()
-            processMessage(message).then(() => {
-              if (statusRef.current !== 'idle') {
-                try { recognition.start() } catch(e) {}
-              }
-            })
-          }
-        }, 600)
+            break
+            
+          case 'text':
+            if (data.partial) {
+              setAiText(prev => prev + data.content)
+            } else {
+              // Full response complete
+              setAiText('')
+            }
+            break
+            
+          case 'audio':
+            // Queue audio chunk for playback
+            const audioData = base64ToArrayBuffer(data.data)
+            playAudioChunk(audioData)
+            break
+            
+          case 'audio_end':
+            console.log('Audio stream ended')
+            break
+            
+          case 'error':
+            console.error('Server error:', data.message)
+            toast.error(data.message)
+            break
+        }
+      } catch (e) {
+        console.error('Message parse error:', e)
       }
     }
     
-    recognition.onerror = (e) => {
-      console.log('Speech recognition error:', e.error)
-      if (e.error === 'no-speech' && statusRef.current === 'listening') {
-        try { recognition.start() } catch(err) {}
-      }
+    ws.onerror = (error) => {
+      console.error('WebSocket error:', error)
+      toast.error('Connection error')
     }
     
-    recognition.onend = () => {
-      if (statusRef.current === 'listening') {
-        try { recognition.start() } catch(e) {}
+    ws.onclose = (event) => {
+      console.log('WebSocket closed:', event.code)
+      if (event.code !== 1000) {
+        toast.error('Connection lost')
       }
     }
-    
-    // Store reference for cleanup
-    mediaRecorderRef.current = recognition
-    
-    // Play greeting then start listening
-    setStatus('speaking')
-    playGreeting().then(() => {
-      setStatus('listening')
-      recognition.start()
-    })
-  }
-
-  const playGreeting = async () => {
-    const greeting = selectedAgent.initialMessage || "Hello! How can I help you?"
-    conversationRef.current = [{ role: 'assistant', content: greeting }]
-    await speakWithElevenLabs(greeting)
   }
 
   const startAudioStreaming = (stream, ws) => {
-    setStatus('listening')
-    
     const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') 
       ? 'audio/webm;codecs=opus' : 'audio/webm'
     
@@ -289,149 +199,63 @@ export default function AgentDemoPage() {
     
     mediaRecorder.ondataavailable = async (event) => {
       if (event.data.size > 0 && ws.readyState === WebSocket.OPEN) {
-        if (statusRef.current === 'speaking' || isProcessingRef.current) return
-        ws.send(await event.data.arrayBuffer())
+        const arrayBuffer = await event.data.arrayBuffer()
+        ws.send(arrayBuffer)
       }
     }
     
-    // Faster chunks = lower latency
+    // Stream audio every 100ms for low latency
     mediaRecorder.start(100)
+    console.log('Started streaming audio')
   }
 
-  const handleDeepgramMessage = (data) => {
-    try {
-      const result = JSON.parse(data)
-      
-      if (result.type === 'Results' && result.channel?.alternatives?.[0]) {
-        const text = result.channel.alternatives[0].transcript
-        const isFinal = result.is_final
-        
-        if (text) {
-          if (isFinal) {
-            transcriptBufferRef.current += (transcriptBufferRef.current ? ' ' : '') + text
-            setTranscript(transcriptBufferRef.current)
-            
-            if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current)
-            
-            // FAST: Only 400ms silence before responding
-            silenceTimeoutRef.current = setTimeout(() => {
-              if (transcriptBufferRef.current.trim() && !isProcessingRef.current) {
-                processMessage(transcriptBufferRef.current.trim())
-                transcriptBufferRef.current = ''
-                setTranscript('')
-              }
-            }, 400)
-            
-          } else {
-            setTranscript(transcriptBufferRef.current + ' ' + text)
-          }
-        }
-      } else if (result.type === 'UtteranceEnd') {
-        // Deepgram detected end of speech - respond immediately
-        if (transcriptBufferRef.current.trim() && !isProcessingRef.current) {
-          if (silenceTimeoutRef.current) clearTimeout(silenceTimeoutRef.current)
-          processMessage(transcriptBufferRef.current.trim())
-          transcriptBufferRef.current = ''
-          setTranscript('')
-        }
-      }
-    } catch (e) {
-      console.error('Parse error:', e)
+  const base64ToArrayBuffer = (base64) => {
+    const binaryString = atob(base64)
+    const bytes = new Uint8Array(binaryString.length)
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i)
+    }
+    return bytes.buffer
+  }
+
+  const playAudioChunk = async (arrayBuffer) => {
+    if (!audioContextRef.current) return
+    
+    // Queue the audio chunk
+    audioQueueRef.current.push(arrayBuffer)
+    
+    // If not currently playing, start playing
+    if (!isPlayingRef.current) {
+      playNextChunk()
     }
   }
 
-  const processMessage = async (message) => {
-    if (isProcessingRef.current) return
-    isProcessingRef.current = true
+  const playNextChunk = async () => {
+    if (audioQueueRef.current.length === 0) {
+      isPlayingRef.current = false
+      return
+    }
     
-    setStatus('processing')
-    conversationRef.current.push({ role: 'user', content: message })
+    isPlayingRef.current = true
+    const chunk = audioQueueRef.current.shift()
     
     try {
-      // Get AI response - use minimal context for speed
-      const res = await fetch('/api/demo/fast', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-        body: JSON.stringify({
-          agentId: selectedAgent.id,
-          message,
-          conversation: conversationRef.current.slice(-4) // Only last 4 messages
-        })
-      })
+      // Decode and play the audio chunk
+      const audioBuffer = await audioContextRef.current.decodeAudioData(chunk.slice(0))
+      const source = audioContextRef.current.createBufferSource()
+      source.buffer = audioBuffer
+      source.connect(audioContextRef.current.destination)
       
-      const data = await res.json()
-      if (data.error) throw new Error(data.error)
+      source.onended = () => {
+        playNextChunk()
+      }
       
-      const reply = data.reply
-      conversationRef.current.push({ role: 'assistant', content: reply })
-      
-      // Speak using ElevenLabs
-      setStatus('speaking')
-      await speakWithElevenLabs(reply)
-      
-      setStatus('listening')
+      source.start(0)
     } catch (e) {
-      console.error('Process error:', e)
-      setStatus('listening')
-    } finally {
-      isProcessingRef.current = false
+      // MP3 chunks might not decode individually, accumulate them
+      console.log('Chunk decode issue, continuing...')
+      playNextChunk()
     }
-  }
-
-  // Use ElevenLabs TTS for high-quality voice
-  const speakWithElevenLabs = async (text) => {
-    try {
-      const res = await fetch('/api/demo/tts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-        body: JSON.stringify({ agentId: selectedAgent.id, text })
-      })
-      
-      const data = await res.json()
-      
-      if (data.audioUrl) {
-        await playAudio(data.audioUrl)
-      } else {
-        // Fallback to browser TTS
-        await speakBrowser(text)
-      }
-    } catch (e) {
-      console.error('TTS error:', e)
-      await speakBrowser(text)
-    }
-  }
-
-  const playAudio = (url) => {
-    return new Promise((resolve) => {
-      const audio = new Audio(url)
-      currentAudioRef.current = audio
-      audio.onended = () => {
-        currentAudioRef.current = null
-        resolve()
-      }
-      audio.onerror = () => {
-        currentAudioRef.current = null
-        resolve()
-      }
-      audio.play().catch(() => resolve())
-    })
-  }
-
-  // Browser TTS fallback
-  const speakBrowser = (text) => {
-    return new Promise((resolve) => {
-      if (!('speechSynthesis' in window)) {
-        resolve()
-        return
-      }
-      
-      speechSynthesis.cancel()
-      const utterance = new SpeechSynthesisUtterance(text)
-      utterance.rate = 1.1 // Slightly faster
-      utterance.onend = resolve
-      utterance.onerror = resolve
-      speechSynthesis.speak(utterance)
-    })
   }
 
   const endCall = () => {
@@ -439,6 +263,8 @@ export default function AgentDemoPage() {
     setIsCallActive(false)
     setStatus('idle')
     setTranscript('')
+    setAiText('')
+    toast.info(`Call ended`)
   }
 
   const formatDuration = (s) => `${Math.floor(s/60)}:${(s%60).toString().padStart(2,'0')}`
@@ -475,6 +301,7 @@ export default function AgentDemoPage() {
             {status === 'listening' && <Mic className="w-5 h-5 text-green-400 animate-pulse" />}
             {status === 'processing' && <Loader2 className="w-5 h-5 text-yellow-400 animate-spin" />}
             {status === 'speaking' && <Volume2 className="w-5 h-5 text-blue-400 animate-pulse" />}
+            {status === 'connecting' && <Loader2 className="w-5 h-5 text-gray-400 animate-spin" />}
             <span className="text-white font-medium capitalize">{status}</span>
           </div>
           <span className="text-gray-400 font-mono">{formatDuration(callDuration)}</span>
@@ -483,8 +310,15 @@ export default function AgentDemoPage() {
 
       {/* Live transcript */}
       {transcript && (
-        <div className="mb-6 max-w-md text-center">
+        <div className="mb-4 max-w-md text-center">
           <p className="text-green-400 text-lg italic">"{transcript}"</p>
+        </div>
+      )}
+
+      {/* AI response (streaming) */}
+      {aiText && (
+        <div className="mb-4 max-w-md text-center">
+          <p className="text-blue-400 text-lg">{aiText}<span className="animate-pulse">▊</span></p>
         </div>
       )}
 
@@ -501,7 +335,7 @@ export default function AgentDemoPage() {
         ) : (
           <button
             onClick={endCall}
-            className="w-32 h-32 rounded-full bg-red-500 hover:bg-red-400 shadow-lg shadow-red-500/30 transition-all flex items-center justify-center animate-pulse"
+            className="w-32 h-32 rounded-full bg-red-500 hover:bg-red-400 shadow-lg shadow-red-500/30 transition-all flex items-center justify-center"
           >
             <PhoneOff className="w-12 h-12 text-white" />
           </button>
@@ -519,6 +353,13 @@ export default function AgentDemoPage() {
       <p className="mt-6 text-gray-500 text-sm">
         {isCallActive ? 'Tap to end call' : 'Tap to start'}
       </p>
+
+      {/* Streaming indicator */}
+      {isCallActive && (
+        <div className="mt-4 text-xs text-gray-600">
+          Real-time streaming: Deepgram → OpenAI → ElevenLabs
+        </div>
+      )}
     </div>
   )
 }

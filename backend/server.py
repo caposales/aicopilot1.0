@@ -256,6 +256,7 @@ async def realtime_conversation(websocket: WebSocket):
                         
                         # Skip while speaking OR during cooldown
                         if state['is_speaking'] or time.time() < state['cooldown_until']:
+                            logger.info(f"Skipping - speaking:{state['is_speaking']} cooldown:{time.time() < state['cooldown_until']}")
                             continue
                         
                         data = json.loads(msg)
@@ -266,9 +267,12 @@ async def realtime_conversation(websocket: WebSocket):
                             is_final = data.get("is_final", False)
                             speech_final = data.get("speech_final", False)
                             
+                            logger.info(f"Transcript: '{transcript}' final:{is_final} speech_final:{speech_final}")
+                            
                             if transcript and is_final:
                                 async with state_lock:
                                     state['transcript_buffer'] += " " + transcript
+                                logger.info(f"Buffer now: '{state['transcript_buffer']}'")
                                 
                                 if response_task:
                                     response_task.cancel()
@@ -280,6 +284,7 @@ async def realtime_conversation(websocket: WebSocket):
                                 response_task = asyncio.create_task(trigger_response())
                         
                         elif data.get("type") == "UtteranceEnd":
+                            logger.info("UtteranceEnd received")
                             if state['transcript_buffer'].strip():
                                 if response_task:
                                     response_task.cancel()

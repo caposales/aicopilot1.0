@@ -23,7 +23,9 @@ import {
   X,
   Shield,
   Users,
-  MessageSquare
+  MessageSquare,
+  Play,
+  BarChart3
 } from 'lucide-react'
 import {
   Collapsible,
@@ -33,6 +35,7 @@ import {
 
 const navigation = [
   { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
+  { name: 'Analytics', href: '/dashboard/analytics', icon: BarChart3 },
   { name: 'Buy Phone Number', href: '/dashboard/buy-number', icon: Phone },
   { name: 'Purchased Numbers', href: '/dashboard/numbers', icon: PhoneIncoming },
   {
@@ -43,6 +46,7 @@ const navigation = [
       { name: 'Outbound Agent', href: '/dashboard/agents/outbound' },
     ]
   },
+  { name: 'Test Agent', href: '/dashboard/demo', icon: Play },
   { name: 'Chatbots', href: '/dashboard/chatbots', icon: MessageSquare },
   { name: 'Contacts', href: '/dashboard/contacts', icon: Users },
   { name: 'Call Logs', href: '/dashboard/call-logs', icon: FileText },

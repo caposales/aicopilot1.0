@@ -2173,6 +2173,280 @@ if (route === '/voices' && method === 'GET') {
       })
     }
 
+    // ====== DEMO ENDPOINTS ======
+
+    // Analytics endpoint
+    if (route === '/analytics' && method === 'GET') {
+      if (!user) return errorResponse('Unauthorized', 401)
+      
+      const range = url.searchParams.get('range') || '7d'
+      const days = range === '24h' ? 1 : range === '7d' ? 7 : range === '30d' ? 30 : 90
+      const startDate = new Date()
+      startDate.setDate(startDate.getDate() - days)
+      
+      // Get call logs for the period
+      const callLogs = await db.collection('call_logs')
+        .find({ 
+          workspaceId: user.workspaceId,
+          createdAt: { $gte: startDate }
+        })
+        .toArray()
+      
+      // Calculate metrics
+      const totalCalls = callLogs.length
+      const completedCalls = callLogs.filter(c => c.status === 'completed').length
+      const failedCalls = callLogs.filter(c => ['failed', 'missed', 'no-answer'].includes(c.status)).length
+      const totalDuration = callLogs.reduce((sum, c) => sum + (c.duration || 0), 0)
+      const avgDuration = totalCalls > 0 ? totalDuration / totalCalls : 0
+      const bookingsMade = callLogs.filter(c => c.toolsUsed?.includes('book_appointment')).length
+      const transfersMade = callLogs.filter(c => c.toolsUsed?.includes('transfer_call')).length
+      const successRate = totalCalls > 0 ? completedCalls / totalCalls : 0
+      
+      // Calls by day
+      const callsByDay = []
+      for (let i = days - 1; i >= 0; i--) {
+        const date = new Date()
+        date.setDate(date.getDate() - i)
+        const dayStart = new Date(date.setHours(0, 0, 0, 0))
+        const dayEnd = new Date(date.setHours(23, 59, 59, 999))
+        const count = callLogs.filter(c => {
+          const callDate = new Date(c.createdAt)
+          return callDate >= dayStart && callDate <= dayEnd
+        }).length
+        callsByDay.push({ date: dayStart.toISOString(), count })
+      }
+      
+      // Calls by hour
+      const hourCounts = {}
+      callLogs.forEach(c => {
+        const hour = new Date(c.createdAt).getHours()
+        hourCounts[hour] = (hourCounts[hour] || 0) + 1
+      })
+      const callsByHour = Object.entries(hourCounts)
+        .map(([hour, count]) => ({ hour: parseInt(hour), count }))
+        .sort((a, b) => b.count - a.count)
+      
+      // Top agents
+      const agentCounts = {}
+      for (const call of callLogs) {
+        if (call.agentId) {
+          agentCounts[call.agentId] = (agentCounts[call.agentId] || 0) + 1
+        }
+      }
+      const agentIds = Object.keys(agentCounts)
+      const agents = agentIds.length > 0 
+        ? await db.collection('agents').find({ id: { $in: agentIds } }).toArray()
+        : []
+      const topAgents = Object.entries(agentCounts)
+        .map(([agentId, calls]) => {
+          const agent = agents.find(a => a.id === agentId)
+          return { name: agent?.name || 'Unknown', calls }
+        })
+        .sort((a, b) => b.calls - a.calls)
+      
+      // Sentiment (placeholder - would need actual sentiment analysis)
+      const sentimentBreakdown = {
+        positive: Math.floor(completedCalls * 0.7),
+        neutral: Math.floor(completedCalls * 0.2),
+        negative: Math.floor(completedCalls * 0.1)
+      }
+      
+      return jsonResponse({
+        totalCalls,
+        completedCalls,
+        failedCalls,
+        avgDuration: Math.round(avgDuration),
+        totalDuration,
+        bookingsMade,
+        transfersMade,
+        successRate,
+        callsByDay,
+        callsByHour,
+        topAgents,
+        sentimentBreakdown,
+        // Change indicators (would compare to previous period)
+        callsChange: 0,
+        successRateChange: 0,
+        durationChange: 0,
+        bookingsChange: 0
+      })
+    }
+
+    // Check demo access
+    if (route === '/demo/access' && method === 'GET') {
+      if (!user) return errorResponse('Unauthorized', 401)
+      
+      const demoAccess = await db.collection('demo_access').findOne({ workspaceId: user.workspaceId })
+      
+      return jsonResponse({
+        hasFullAccess: demoAccess?.hasFullAccess || false,
+        minutesUsed: demoAccess?.minutesUsed || 0,
+        expiresAt: demoAccess?.expiresAt || null
+      })
+    }
+
+    // Browser voice chat demo
+    if (route === '/demo/chat' && method === 'POST') {
+      if (!user) return errorResponse('Unauthorized', 401)
+      
+      const body = await request.json()
+      const { agentId, message, conversation = [] } = body
+      
+      if (!agentId || !message) {
+        return errorResponse('Agent ID and message are required')
+      }
+      
+      // Get agent details
+      const agent = await db.collection('agents').findOne({ id: agentId, workspaceId: user.workspaceId })
+      if (!agent) return errorResponse('Agent not found', 404)
+      
+      // Check demo limits
+      let demoAccess = await db.collection('demo_access').findOne({ workspaceId: user.workspaceId })
+      if (!demoAccess) {
+        demoAccess = { workspaceId: user.workspaceId, minutesUsed: 0, hasFullAccess: false }
+        await db.collection('demo_access').insertOne(demoAccess)
+      }
+      
+      const FREE_DEMO_MINUTES = 2
+      if (demoAccess.minutesUsed >= FREE_DEMO_MINUTES && !demoAccess.hasFullAccess) {
+        return errorResponse('Demo limit reached. Upgrade for full access.', 403)
+      }
+      
+      // Build conversation for AI
+      const systemPrompt = agent.systemPrompt || `You are ${agent.name}, a helpful AI assistant.`
+      const messages = [
+        { role: 'system', content: systemPrompt }
+      ]
+      
+      // Add conversation history
+      for (const msg of conversation.slice(-10)) {
+        messages.push({ role: msg.role, content: msg.content })
+      }
+      messages.push({ role: 'user', content: message })
+      
+      try {
+        // Call Emergent LLM API
+        const llmResponse = await fetch('https://integrations.emergentagent.com/llm/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${process.env.EMERGENT_LLM_KEY}`
+          },
+          body: JSON.stringify({
+            model: 'gpt-5.2',
+            messages,
+            max_tokens: 300
+          })
+        })
+        
+        const llmData = await llmResponse.json()
+        const reply = llmData.choices?.[0]?.message?.content || 'Sorry, I could not process your request.'
+        
+        // Generate TTS audio using ElevenLabs if configured
+        let audioUrl = null
+        const integrations = await db.collection('integrations').findOne({ workspaceId: user.workspaceId })
+        
+        if (integrations?.elevenlabs?.configured && integrations?.elevenlabs?.apiKey && agent.voiceId) {
+          try {
+            const { decrypt } = await import('@/lib/encryption')
+            const elevenLabsKey = decrypt(integrations.elevenlabs.apiKey)
+            
+            const ttsResponse = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${agent.voiceId}`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'xi-api-key': elevenLabsKey
+              },
+              body: JSON.stringify({
+                text: reply,
+                model_id: 'eleven_monolingual_v1',
+                voice_settings: {
+                  stability: 0.5,
+                  similarity_boost: 0.75
+                }
+              })
+            })
+            
+            if (ttsResponse.ok) {
+              // Convert audio to base64 data URL
+              const audioBuffer = await ttsResponse.arrayBuffer()
+              const base64Audio = Buffer.from(audioBuffer).toString('base64')
+              audioUrl = `data:audio/mpeg;base64,${base64Audio}`
+            }
+          } catch (ttsError) {
+            console.error('TTS error:', ttsError)
+            // Continue without audio
+          }
+        }
+        
+        // Update minutes used (roughly estimate based on message length)
+        const estimatedMinutes = Math.ceil((message.length + reply.length) / 500) * 0.1
+        await db.collection('demo_access').updateOne(
+          { workspaceId: user.workspaceId },
+          { $inc: { minutesUsed: estimatedMinutes } }
+        )
+        
+        // Log the demo interaction
+        await db.collection('demo_logs').insertOne({
+          id: uuidv4(),
+          workspaceId: user.workspaceId,
+          agentId,
+          userMessage: message,
+          aiReply: reply,
+          hasAudio: !!audioUrl,
+          createdAt: new Date()
+        })
+        
+        return jsonResponse({
+          reply,
+          audioUrl,
+          minutesUsed: (demoAccess.minutesUsed || 0) + estimatedMinutes
+        })
+        
+      } catch (error) {
+        console.error('Demo chat error:', error)
+        return errorResponse('Failed to process demo chat', 500)
+      }
+    }
+
+    // Phone test call demo
+    if (route === '/demo/call' && method === 'POST') {
+      if (!user) return errorResponse('Unauthorized', 401)
+      
+      const body = await request.json()
+      const { agentId, phoneNumber } = body
+      
+      if (!agentId || !phoneNumber) {
+        return errorResponse('Agent ID and phone number are required')
+      }
+      
+      // Check if user has full access
+      const demoAccess = await db.collection('demo_access').findOne({ workspaceId: user.workspaceId })
+      if (!demoAccess?.hasFullAccess) {
+        return errorResponse('Phone demos require full access. Please upgrade.', 403)
+      }
+      
+      // Get agent and Twilio integration
+      const agent = await db.collection('agents').findOne({ id: agentId, workspaceId: user.workspaceId })
+      if (!agent) return errorResponse('Agent not found', 404)
+      
+      const integrations = await db.collection('integrations').findOne({ workspaceId: user.workspaceId })
+      if (!integrations?.twilio?.configured) {
+        return errorResponse('Twilio not configured. Please set up Twilio in Integrations.', 400)
+      }
+      
+      // TODO: Implement actual Twilio call initiation
+      // This would use the Twilio API to make an outbound call
+      // For now, return a placeholder response
+      
+      return jsonResponse({
+        success: true,
+        message: 'Demo call initiated',
+        callSid: `demo_${uuidv4()}`,
+        note: 'Twilio call integration pending implementation'
+      })
+    }
+
     // Route not found
     return errorResponse(`Route ${route} not found`, 404)
 

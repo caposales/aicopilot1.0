@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import Response, JSONResponse
@@ -7,6 +7,8 @@ import logging
 from pathlib import Path
 import httpx
 import asyncio
+import websockets
+import json
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -40,6 +42,77 @@ async def health_check():
 @app.get("/health")
 async def health():
     return {"status": "healthy"}
+
+# WebSocket proxy for Deepgram - handles the connection server-side
+# Route: /api/ws/deepgram to work with Kubernetes ingress
+@app.websocket("/api/ws/deepgram")
+async def deepgram_websocket_proxy(websocket: WebSocket):
+    """Proxy WebSocket connection to Deepgram for real-time STT"""
+    await websocket.accept()
+    
+    # Get Deepgram API key from environment
+    deepgram_key = os.environ.get('DEEPGRAM_API_KEY')
+    logger.info(f"Deepgram key loaded: {deepgram_key[:10] if deepgram_key else 'NONE'}...")
+    
+    if not deepgram_key:
+        await websocket.send_json({"error": "Deepgram API key not configured"})
+        await websocket.close()
+        return
+    
+    # Build Deepgram WebSocket URL - use simpler URL, params can cause issues
+    deepgram_url = "wss://api.deepgram.com/v1/listen"
+    
+    try:
+        # Connect to Deepgram using Authorization header
+        headers = {"Authorization": f"Token {deepgram_key}"}
+        logger.info(f"Connecting to Deepgram with headers: {list(headers.keys())}")
+        
+        async with websockets.connect(
+            deepgram_url,
+            additional_headers=headers
+        ) as deepgram_ws:
+            logger.info("Connected to Deepgram WebSocket successfully!")
+            
+            # Send confirmation to client
+            await websocket.send_json({"type": "connected"})
+            
+            async def forward_to_deepgram():
+                """Forward audio from client to Deepgram"""
+                try:
+                    while True:
+                        data = await websocket.receive_bytes()
+                        await deepgram_ws.send(data)
+                except WebSocketDisconnect:
+                    logger.info("Client disconnected")
+                except Exception as e:
+                    logger.error(f"Forward to Deepgram error: {e}")
+            
+            async def forward_to_client():
+                """Forward transcription from Deepgram to client"""
+                try:
+                    async for message in deepgram_ws:
+                        await websocket.send_text(message)
+                except Exception as e:
+                    logger.error(f"Forward to client error: {e}")
+            
+            # Run both forwarding tasks concurrently
+            await asyncio.gather(
+                forward_to_deepgram(),
+                forward_to_client(),
+                return_exceptions=True
+            )
+            
+    except Exception as e:
+        logger.error(f"Deepgram WebSocket error: {type(e).__name__}: {e}")
+        try:
+            await websocket.send_json({"error": str(e)})
+        except:
+            pass
+    finally:
+        try:
+            await websocket.close()
+        except:
+            pass
 
 # Proxy all /api requests to Next.js with retry logic
 @app.api_route("/api/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])

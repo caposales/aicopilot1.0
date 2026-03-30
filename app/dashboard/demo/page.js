@@ -115,64 +115,79 @@ export default function AgentDemoPage() {
 
   const connectToDeepgram = async (stream) => {
     try {
-      const tokenRes = await fetch('/api/demo/deepgram-token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }
-      })
+      console.log('Connecting to Deepgram via backend proxy...')
       
-      if (!tokenRes.ok) {
-        throw new Error('Failed to get Deepgram token')
-      }
+      // Connect through our backend WebSocket proxy
+      const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      const wsHost = window.location.host
+      const wsUrl = `${wsProtocol}//${wsHost}/api/ws/deepgram`
       
-      const { token } = await tokenRes.json()
-      console.log('Got Deepgram token, connecting to WebSocket...')
-      
-      // Aggressive endpointing for fast response
-      const wsUrl = `wss://api.deepgram.com/v1/listen?model=nova-2&punctuate=true&interim_results=true&endpointing=200&utterance_end_ms=500`
-      
-      const ws = new WebSocket(wsUrl, ['token', token])
+      console.log('WebSocket URL:', wsUrl)
+      const ws = new WebSocket(wsUrl)
       deepgramSocketRef.current = ws
       
       // Set a connection timeout
       const connectionTimeout = setTimeout(() => {
         if (ws.readyState !== WebSocket.OPEN) {
-          console.error('WebSocket connection timeout')
+          console.error('WebSocket connection timeout - readyState:', ws.readyState)
           ws.close()
-          toast.error('Connection timeout - trying fallback mode')
-          // Use browser speech recognition as fallback
+          toast.error('Deepgram connection timeout - using browser fallback')
           useBrowserSpeechRecognition(stream)
         }
-      }, 5000)
+      }, 10000)
       
       ws.onopen = () => {
-        clearTimeout(connectionTimeout)
-        console.log('Deepgram WebSocket connected!')
-        setStatus('speaking')
-        playGreeting().then(() => startAudioStreaming(stream, ws))
+        console.log('WebSocket opened, waiting for Deepgram connection...')
       }
       
-      ws.onmessage = (event) => handleDeepgramMessage(event.data)
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data)
+          
+          // Check for connection confirmation
+          if (data.type === 'connected') {
+            clearTimeout(connectionTimeout)
+            console.log('Deepgram connected via proxy!')
+            toast.success('Connected to Deepgram')
+            setStatus('speaking')
+            playGreeting().then(() => startAudioStreaming(stream, ws))
+            return
+          }
+          
+          // Check for errors
+          if (data.error) {
+            console.error('Deepgram error:', data.error)
+            clearTimeout(connectionTimeout)
+            toast.error('Deepgram error - using browser fallback')
+            useBrowserSpeechRecognition(stream)
+            return
+          }
+          
+          // Handle transcription results
+          handleDeepgramMessage(event.data)
+        } catch (e) {
+          // Not JSON, might be binary or raw message
+          handleDeepgramMessage(event.data)
+        }
+      }
       
       ws.onerror = (error) => {
         clearTimeout(connectionTimeout)
-        console.error('Deepgram WebSocket error:', error)
-        // Try fallback
-        toast.error('Deepgram error - using browser speech recognition')
-        useBrowserSpeechRecognition(stream)
+        console.error('WebSocket error event:', error)
       }
       
       ws.onclose = (event) => {
         clearTimeout(connectionTimeout)
-        console.log('Deepgram closed:', event.code, event.reason)
-        if (event.code === 1008) {
-          // Policy violation - likely auth issue
-          console.error('Auth rejected by Deepgram')
-          toast.error('Deepgram auth failed - using fallback')
+        console.log('WebSocket closed - code:', event.code, 'reason:', event.reason)
+        
+        if (statusRef.current !== 'idle' && event.code !== 1000) {
+          console.error('Connection failed, using browser fallback')
+          toast.error('Connection lost - using browser')
           useBrowserSpeechRecognition(stream)
         }
       }
     } catch (e) {
-      console.error('Deepgram setup error:', e)
+      console.error('Connection setup error:', e)
       toast.error('Setup error - using browser speech recognition')
       useBrowserSpeechRecognition(stream)
     }

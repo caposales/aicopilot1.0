@@ -2460,6 +2460,99 @@ if (route === '/voices' && method === 'GET') {
       }
     }
 
+    // Dedicated TTS endpoint for faster audio generation
+    if (route === '/demo/tts' && method === 'POST') {
+      if (!user) return errorResponse('Unauthorized', 401)
+      
+      const body = await request.json()
+      const { agentId, text } = body
+      
+      if (!text) return errorResponse('Text is required')
+      
+      const agent = await db.collection('agents').findOne({ id: agentId, workspaceId: user.workspaceId })
+      const integrations = await db.collection('integrations').findOne({ workspaceId: user.workspaceId })
+      
+      let audioUrl = null
+      
+      if (integrations?.elevenlabs?.configured && integrations?.elevenlabs?.apiKey && agent?.voiceId) {
+        try {
+          const { decrypt } = await import('@/lib/encryption')
+          const elevenLabsKey = decrypt(integrations.elevenlabs.apiKey)
+          
+          const ttsResponse = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${agent.voiceId}`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'xi-api-key': elevenLabsKey
+            },
+            body: JSON.stringify({
+              text,
+              model_id: 'eleven_turbo_v2', // Faster model
+              voice_settings: {
+                stability: 0.5,
+                similarity_boost: 0.75
+              }
+            })
+          })
+          
+          if (ttsResponse.ok) {
+            const audioBuffer = await ttsResponse.arrayBuffer()
+            const base64Audio = Buffer.from(audioBuffer).toString('base64')
+            audioUrl = `data:audio/mpeg;base64,${base64Audio}`
+          }
+        } catch (e) {
+          console.error('TTS error:', e)
+        }
+      }
+      
+      return jsonResponse({ audioUrl })
+    }
+
+    // Streaming demo endpoint - faster responses
+    if (route === '/demo/stream' && method === 'POST') {
+      if (!user) return errorResponse('Unauthorized', 401)
+      
+      const body = await request.json()
+      const { agentId, message, conversation = [] } = body
+      
+      if (!agentId || !message) return errorResponse('Agent ID and message required')
+      
+      const agent = await db.collection('agents').findOne({ id: agentId, workspaceId: user.workspaceId })
+      if (!agent) return errorResponse('Agent not found', 404)
+      
+      // Build messages
+      const systemPrompt = agent.systemPrompt || `You are ${agent.name}. Be concise and conversational.`
+      const messages = [{ role: 'system', content: systemPrompt + ' Keep responses brief - 1-2 sentences max.' }]
+      
+      for (const msg of conversation.slice(-6)) {
+        messages.push({ role: msg.role, content: msg.content })
+      }
+      messages.push({ role: 'user', content: message })
+      
+      try {
+        const llmResponse = await fetch('https://integrations.emergentagent.com/llm/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${process.env.EMERGENT_LLM_KEY}`
+          },
+          body: JSON.stringify({
+            model: 'gpt-5.2',
+            messages,
+            max_tokens: 150 // Shorter responses = faster
+          })
+        })
+        
+        const llmData = await llmResponse.json()
+        const reply = llmData.choices?.[0]?.message?.content || 'Sorry, I had an issue.'
+        
+        return jsonResponse({ reply })
+      } catch (e) {
+        console.error('Stream error:', e)
+        return errorResponse('Failed', 500)
+      }
+    }
+
     // Phone test call demo
     if (route === '/demo/call' && method === 'POST') {
       if (!user) return errorResponse('Unauthorized', 401)

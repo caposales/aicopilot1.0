@@ -1,82 +1,76 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
-# IDE and editors
-.idea/
-.vscode/
-
-# Dependencies
-node_modules/
-/node_modules
-/.pnp
-.pnp.js
-.yarn/install-state.gz
-.yarn/*
 !.yarn/patches
 !.yarn/plugins
 !.yarn/releases
 !.yarn/versions
-
-# Testing
-/coverage
-
-# Next.js
-/.next/
-/out/
-next-env.d.ts
-*.tsbuildinfo
-
-# Production builds
-/build
-dist/
-dist
-
-# Environment files (comprehensive coverage)
-
-*token.json*
-*credentials.json*
-
-# Logs and debug files
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.pnpm-debug.log*
-dump.rdb
-
-# System files
-.DS_Store
-*.pem
-
-# Python
-__pycache__/
-*pyc*
-venv/
-.venv/
-
-# Development tools
-chainlit.md
-.chainlit
-.ipynb_checkpoints/
-.ac
-
-# Deployment
-.vercel
-
-# Data and databases
-agenthub/agents/youtube/db
-
 # Archive files and large assets
-**/*.zip
-**/*.tar.gz
+# Build caches
+# Data and databases
+# Dependencies
+# Deployment
+# Development tools
+# Environment files
+# Environment files (comprehensive coverage)
+# IDE and editors
+# Logs and debug files
+# Mobile development
+# Next.js
+# Production builds
+# Python
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+# System files
+# Testing
 **/*.tar
+**/*.tar.gz
 **/*.tgz
-*.pack
+**/*.zip
 *.deb
 *.dylib
-
-# Build caches
+*.env
+*.env.*
+*.pack
+*.pem
+*.tsbuildinfo
+*credentials.json*
+*pyc*
+*token.json*
+.DS_Store
+.ac
 .cache/
-
-# Mobile development
+.chainlit
+.idea/
+.ipynb_checkpoints/
+.pnp.js
+.pnpm-debug.log*
+.venv/
+.vercel
+.vscode/
+.yarn/*
+.yarn/install-state.gz
+/.next/
+/.pnp
+/build
+/coverage
+/node_modules
+/out/
+__pycache__/
+agenthub/agents/youtube/db
 android-sdk/ node_modules/@next/swc-linux-arm64-musl/next-swc.linux-arm64-musl.node
+chainlit.md
+dist
+dist/
+dump.rdb
+next-env.d.ts
+node_modules/
 node_modules/@next/swc-linux-arm64-gnu/next-swc.linux-arm64-gnu.node
 node_modules/@next/swc-linux-arm64-musl/next-swc.linux-arm64-musl.node
+npm-debug.log*
+venv/
+yarn-debug.log*
+yarn-error.log*
+
+# Environment files
+.env
+.env.*
+*.env
+backend/.env
+frontend/.env

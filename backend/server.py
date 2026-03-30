@@ -71,9 +71,11 @@ async def realtime_conversation(websocket: WebSocket):
         'should_stop': False,
         'transcript_buffer': '',
         'conversation': [],
-        'pending_response': None
+        'cooldown_until': 0  # Timestamp until we ignore input
     }
     state_lock = asyncio.Lock()
+    
+    import time
     
     async def stream_tts(text: str):
         """Stream TTS - blocks until complete"""
@@ -115,6 +117,8 @@ async def realtime_conversation(websocket: WebSocket):
         finally:
             async with state_lock:
                 state['is_speaking'] = False
+                state['transcript_buffer'] = ''  # Clear any buffered audio
+                state['cooldown_until'] = time.time() + 0.3  # 300ms cooldown
     
     async def stream_llm_tts(user_message: str):
         """Stream LLM -> TTS with word-by-word streaming"""
@@ -199,6 +203,8 @@ async def realtime_conversation(websocket: WebSocket):
         async with state_lock:
             state['conversation'].append({"role": "assistant", "content": full_response})
             state['is_speaking'] = False
+            state['transcript_buffer'] = ''  # Clear buffer
+            state['cooldown_until'] = time.time() + 0.3  # 300ms cooldown after speaking
     
     # Connect to Deepgram
     try:
@@ -215,21 +221,26 @@ async def realtime_conversation(websocket: WebSocket):
             await websocket.send_json({"type": "status", "status": "listening"})
             
             async def handle_deepgram():
-                """Process transcriptions - ignore while speaking"""
+                """Process transcriptions - ignore while speaking + cooldown"""
                 response_task = None
                 
                 async def trigger_response():
                     """Trigger AI response after brief silence"""
-                    await asyncio.sleep(0.1)  # 100ms - super fast
+                    await asyncio.sleep(0.1)  # 100ms
                     
                     async with state_lock:
+                        # Check cooldown
+                        if time.time() < state['cooldown_until']:
+                            state['transcript_buffer'] = ''
+                            return
+                        
                         if state['is_speaking']:
                             return
                         
                         message = state['transcript_buffer'].strip()
                         state['transcript_buffer'] = ''
                         
-                        # Ignore short noise
+                        # Ignore short noise - must be real speech
                         if len(message) < 5 or len(message.split()) < 2:
                             return
                     
@@ -244,8 +255,8 @@ async def realtime_conversation(websocket: WebSocket):
                         if state['should_stop']:
                             break
                         
-                        # Skip all transcription while speaking
-                        if state['is_speaking']:
+                        # Skip while speaking OR during cooldown
+                        if state['is_speaking'] or time.time() < state['cooldown_until']:
                             continue
                         
                         data = json.loads(msg)
@@ -285,8 +296,8 @@ async def realtime_conversation(websocket: WebSocket):
                         msg = await websocket.receive()
                         if msg["type"] == "websocket.receive":
                             if "bytes" in msg:
-                                # Only send audio when NOT speaking
-                                if not state['is_speaking']:
+                                # Only send audio when NOT speaking AND not in cooldown
+                                if not state['is_speaking'] and time.time() >= state['cooldown_until']:
                                     await deepgram_ws.send(msg["bytes"])
                             elif "text" in msg:
                                 data = json.loads(msg["text"])

@@ -98,8 +98,8 @@ async def realtime_conversation(websocket: WebSocket):
         except Exception as e:
             logger.error(f"TTS error: {e}")
         finally:
+            await asyncio.sleep(0.5)  # Cooldown to prevent echo pickup
             is_speaking = False
-            speaking_cooldown = time.time() + 0.5  # 500ms cooldown after speaking
     
     async def respond(user_msg):
         nonlocal is_speaking, conversation, stop_speaking
@@ -172,6 +172,7 @@ async def realtime_conversation(websocket: WebSocket):
         
         if full_response:
             conversation.append({"role": "assistant", "content": full_response})
+        await asyncio.sleep(0.5)  # Cooldown to prevent echo
         is_speaking = False
     
     try:
@@ -198,11 +199,11 @@ async def realtime_conversation(websocket: WebSocket):
             async def process():
                 nonlocal transcript_buffer, last_transcript_time, interrupt_buffer, processing_lock, pending_process
                 
-                # Wait 0.8s for user to finish speaking (faster response)
-                await asyncio.sleep(0.8)
+                # Wait 1s for user to finish speaking
+                await asyncio.sleep(1.0)
                 
                 # If new speech came in during the wait, abort
-                if time.time() - last_transcript_time < 0.7:
+                if time.time() - last_transcript_time < 0.9:
                     return
                 
                 # Prevent multiple simultaneous responses

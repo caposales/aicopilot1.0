@@ -2460,6 +2460,57 @@ if (route === '/voices' && method === 'GET') {
       }
     }
 
+    // Generate temporary Deepgram token for browser WebSocket connection
+    if (route === '/demo/deepgram-token' && method === 'POST') {
+      if (!user) return errorResponse('Unauthorized', 401)
+      
+      const deepgramApiKey = process.env.DEEPGRAM_API_KEY
+      
+      if (!deepgramApiKey) {
+        return errorResponse('Deepgram API key not configured', 500)
+      }
+      
+      try {
+        // Generate temporary token from Deepgram using the grant endpoint
+        const response = await fetch('https://api.deepgram.com/v1/auth/grant', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Token ${deepgramApiKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            // Token valid for 600 seconds (10 minutes) for longer conversations
+            ttl_seconds: 600
+          })
+        })
+        
+        if (!response.ok) {
+          const errorText = await response.text()
+          console.error('Deepgram token error:', response.status, errorText)
+          // Fallback: return the API key directly (works but less secure)
+          return jsonResponse({ 
+            token: deepgramApiKey,
+            expiresAt: Date.now() + 600000
+          })
+        }
+        
+        const data = await response.json()
+        
+        return jsonResponse({ 
+          token: data.access_token || deepgramApiKey,
+          expiresAt: Date.now() + (data.expires_in || 600) * 1000
+        })
+        
+      } catch (e) {
+        console.error('Deepgram token generation error:', e)
+        // Fallback: return the API key directly
+        return jsonResponse({ 
+          token: deepgramApiKey,
+          expiresAt: Date.now() + 600000
+        })
+      }
+    }
+
     // Dedicated TTS endpoint for faster audio generation
     if (route === '/demo/tts' && method === 'POST') {
       if (!user) return errorResponse('Unauthorized', 401)

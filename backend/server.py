@@ -81,7 +81,7 @@ async def realtime_conversation(websocket: WebSocket):
             state['is_speaking'] = True
         
         try:
-            uri = f"wss://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream-input?model_id=eleven_turbo_v2"
+            uri = f"wss://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream-input?model_id=eleven_flash_v2_5"
             
             async with websockets.connect(uri) as tts_ws:
                 # BOS
@@ -128,7 +128,7 @@ async def realtime_conversation(websocket: WebSocket):
         full_response = ""
         
         try:
-            uri = f"wss://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream-input?model_id=eleven_turbo_v2"
+            uri = f"wss://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream-input?model_id=eleven_flash_v2_5"
             
             async with websockets.connect(uri) as tts_ws:
                 # BOS

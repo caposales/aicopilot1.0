@@ -189,62 +189,64 @@ async def realtime_conversation(websocket: WebSocket):
             
             response_task = None
             last_transcript_time = 0
-            is_processing = False  # Flag to prevent overlapping responses
+            interrupt_buffer = ""  # Collect speech during AI talking
             
             async def process():
-                nonlocal transcript_buffer, last_transcript_time, is_processing
+                nonlocal transcript_buffer, last_transcript_time
                 
-                # Wait for silence
                 await asyncio.sleep(0.5)
                 
-                # Don't process if still receiving speech or already processing
                 if time.time() - last_transcript_time < 0.4:
-                    return
-                
-                if is_processing or is_speaking:
                     return
                 
                 msg = transcript_buffer.strip()
                 transcript_buffer = ""
                 
-                if not msg or len(msg.split()) < 3 or should_stop:
+                if not msg or len(msg.split()) < 3 or should_stop or is_speaking:
                     return
                 
-                is_processing = True
                 logger.info(f"Processing: {msg}")
                 
                 try:
                     await websocket.send_json({"type": "status", "status": "speaking"})
                     await respond(msg)
-                    if not should_stop:
-                        await websocket.send_json({"type": "status", "status": "listening"})
+                    
+                    # After speaking, check if user interrupted with something meaningful
+                    if interrupt_buffer.strip() and len(interrupt_buffer.split()) >= 3:
+                        logger.info(f"User interrupted with: {interrupt_buffer}")
+                        transcript_buffer = interrupt_buffer
+                        interrupt_buffer = ""
+                        # Process the interrupt
+                        await asyncio.sleep(0.3)
+                        await process()
+                    else:
+                        interrupt_buffer = ""
+                        if not should_stop:
+                            await websocket.send_json({"type": "status", "status": "listening"})
                 except Exception as e:
                     logger.error(f"Process error: {e}")
-                finally:
-                    is_processing = False
             
             async def handle_dg():
-                nonlocal transcript_buffer, response_task, should_stop, last_transcript_time
+                nonlocal transcript_buffer, response_task, should_stop, last_transcript_time, interrupt_buffer
                 try:
                     async for msg in dg:
                         if should_stop: break
-                        
-                        # Ignore while speaking, processing, or cooldown
-                        if is_speaking or is_processing or time.time() < speaking_cooldown:
-                            transcript_buffer = ""  # Clear any buffered speech
-                            continue
                         
                         data = json.loads(msg)
                         if data.get("type") == "Results":
                             t = data.get("channel", {}).get("alternatives", [{}])[0].get("transcript", "")
                             if t and data.get("is_final"):
-                                transcript_buffer += " " + t
                                 last_transcript_time = time.time()
                                 logger.info(f"Got: {t}")
                                 
-                                if response_task and not response_task.done(): 
-                                    response_task.cancel()
-                                response_task = asyncio.create_task(process())
+                                # If AI is speaking, collect as potential interrupt
+                                if is_speaking or time.time() < speaking_cooldown:
+                                    interrupt_buffer += " " + t
+                                else:
+                                    transcript_buffer += " " + t
+                                    if response_task and not response_task.done(): 
+                                        response_task.cancel()
+                                    response_task = asyncio.create_task(process())
                 except Exception as e:
                     logger.error(f"DG error: {e}")
             

@@ -209,7 +209,9 @@ async def realtime_conversation(websocket: WebSocket):
                     return
                 
                 msg = transcript_buffer.strip()
-                if not msg or should_stop:
+                # Require at least 4 words to process
+                if not msg or len(msg.split()) < 4 or should_stop:
+                    logger.info(f"Skipping short message: {msg}")
                     return
                 
                 processing_lock = True

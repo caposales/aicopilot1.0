@@ -66,6 +66,7 @@ async def realtime_conversation(websocket: WebSocket):
     should_stop = False
     transcript_buffer = ""
     conversation = []
+    stop_tts = False  # Signal to stop TTS on interrupt
     
     async def speak(text):
         nonlocal is_speaking
@@ -101,8 +102,9 @@ async def realtime_conversation(websocket: WebSocket):
             is_speaking = False
     
     async def respond(user_msg):
-        nonlocal is_speaking, conversation
+        nonlocal is_speaking, conversation, stop_tts
         is_speaking = True
+        stop_tts = False
         conversation.append({"role": "user", "content": user_msg})
         
         messages = [{"role": "system", "content": system_prompt}] + conversation[-6:]
@@ -122,7 +124,8 @@ async def realtime_conversation(websocket: WebSocket):
                 async def forward():
                     try:
                         async for msg in tts:
-                            if should_stop: 
+                            if should_stop or stop_tts: 
+                                logger.info("TTS interrupted by user")
                                 break
                             try:
                                 d = json.loads(msg)
@@ -135,7 +138,7 @@ async def realtime_conversation(websocket: WebSocket):
                 
                 audio_task = asyncio.create_task(forward())
                 
-                # Stream LLM from Groq (ultra fast)
+                # Stream LLM from Groq
                 async with httpx.AsyncClient() as client:
                     async with client.stream(
                         "POST",
@@ -146,7 +149,7 @@ async def realtime_conversation(websocket: WebSocket):
                     ) as resp:
                         buf = ""
                         async for line in resp.aiter_lines():
-                            if should_stop: break
+                            if should_stop or stop_tts: break
                             if line.startswith("data: ") and "[DONE]" not in line:
                                 try:
                                     c = json.loads(line[6:]).get("choices", [{}])[0].get("delta", {}).get("content", "")
@@ -157,15 +160,18 @@ async def realtime_conversation(websocket: WebSocket):
                                             await tts.send(json.dumps({"text": buf, "try_trigger_generation": True}))
                                             buf = ""
                                 except: pass
-                        if buf:
+                        if buf and not stop_tts:
                             await tts.send(json.dumps({"text": buf, "try_trigger_generation": True}))
                 
                 await tts.send(json.dumps({"text": ""}))
                 
-                # Wait for audio to finish playing
-                try:
-                    await asyncio.wait_for(audio_task, timeout=15.0)
-                except asyncio.TimeoutError:
+                # Wait for audio unless interrupted
+                if not stop_tts:
+                    try:
+                        await asyncio.wait_for(audio_task, timeout=15.0)
+                    except asyncio.TimeoutError:
+                        audio_task.cancel()
+                else:
                     audio_task.cancel()
                 
                 await websocket.send_json({"type": "audio_end"})
@@ -174,7 +180,6 @@ async def realtime_conversation(websocket: WebSocket):
         
         if full_response:
             conversation.append({"role": "assistant", "content": full_response})
-        await asyncio.sleep(0.8)  # Cooldown - give time for queued speech to accumulate
         is_speaking = False
     
     try:
@@ -229,10 +234,10 @@ async def realtime_conversation(websocket: WebSocket):
                     processing_lock = False
             
             async def handle_dg():
-                nonlocal transcript_buffer, response_task, should_stop, last_transcript_time, pending_process
+                nonlocal transcript_buffer, response_task, should_stop, last_transcript_time, pending_process, stop_tts
                 
-                current_utterance = ""  # Build up the current utterance
-                queued_question = ""  # Question asked during AI response - answer AFTER current response
+                current_utterance = ""
+                interrupt_speech = ""  # What user says while AI is talking
                 
                 try:
                     async for msg in dg:
@@ -242,16 +247,7 @@ async def realtime_conversation(websocket: WebSocket):
                         
                         # UtteranceEnd = speaker finished talking
                         if data.get("type") == "UtteranceEnd":
-                            # If we have queued question and AI stopped, process it
-                            if queued_question.strip() and not is_speaking and not processing_lock:
-                                logger.info(f"UtteranceEnd - processing queued: {queued_question.strip()}")
-                                transcript_buffer = queued_question
-                                queued_question = ""
-                                current_utterance = ""
-                                if pending_process and not pending_process.done():
-                                    pending_process.cancel()
-                                pending_process = asyncio.create_task(process())
-                            elif current_utterance.strip() and not is_speaking and not processing_lock:
+                            if current_utterance.strip() and not is_speaking and not processing_lock:
                                 logger.info(f"UtteranceEnd - processing: {current_utterance.strip()}")
                                 transcript_buffer = current_utterance
                                 current_utterance = ""
@@ -271,25 +267,32 @@ async def realtime_conversation(websocket: WebSocket):
                                 
                             last_transcript_time = time.time()
                             
-                            # If AI is speaking/processing, queue the question
+                            # If AI is speaking, collect interrupt and STOP AI when ready
                             if is_speaking or processing_lock:
                                 if is_final:
-                                    queued_question += " " + t
-                                    word_count = len(queued_question.split())
-                                    logger.info(f"Queued ({word_count} words): {queued_question.strip()}")
+                                    interrupt_speech += " " + t
+                                    word_count = len(interrupt_speech.split())
+                                    logger.info(f"Interrupt ({word_count} words): {interrupt_speech.strip()}")
+                                    
+                                    # 5+ words = real question, stop AI and answer it
+                                    if word_count >= 5:
+                                        logger.info(f"STOPPING AI to answer: {interrupt_speech.strip()}")
+                                        stop_tts = True
+                                        # Set up the interrupt as next thing to process
+                                        current_utterance = interrupt_speech
+                                        interrupt_speech = ""
                             else:
-                                # AI not speaking
-                                if is_final:
-                                    # If we have queued content, prepend it
-                                    if queued_question.strip():
-                                        current_utterance = queued_question + " " + t
-                                        queued_question = ""
-                                        logger.info(f"Merged queued + new: {current_utterance.strip()}")
-                                    else:
-                                        current_utterance += " " + t
-                                        logger.info(f"Accumulated: {current_utterance.strip()}")
+                                # AI not speaking - normal accumulation
+                                # If we have interrupt speech that didn't trigger (< 5 words), add it
+                                if interrupt_speech.strip():
+                                    current_utterance = interrupt_speech
+                                    interrupt_speech = ""
                                 
-                                # speech_final = user stopped speaking, process now
+                                if is_final:
+                                    current_utterance += " " + t
+                                    logger.info(f"Accumulated: {current_utterance.strip()}")
+                                
+                                # speech_final = user stopped speaking
                                 if speech_final and current_utterance.strip() and len(current_utterance.split()) >= 2:
                                     logger.info(f"speech_final - processing: {current_utterance.strip()}")
                                     transcript_buffer = current_utterance

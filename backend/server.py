@@ -106,15 +106,19 @@ async def realtime_conversation(websocket: WebSocket):
             await asyncio.sleep(0.5)  # Cooldown to prevent echo pickup
             state["is_speaking"] = False
     
-    async def respond(user_msg):
+    async def respond(user_msg, start_time=None):
         nonlocal conversation, stop_tts
         state["is_speaking"] = True
         stop_tts = False
         conversation.append({"role": "user", "content": user_msg})
         
+        if start_time:
+            logger.info(f">>> respond() called {(time.time()-start_time)*1000:.0f}ms after process start")
+        
         messages = [{"role": "system", "content": system_prompt}] + conversation[-6:]
         full_response = ""
         audio_chunks_sent = 0
+        first_audio_time = None
         
         try:
             uri = f"wss://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream-input?model_id=eleven_flash_v2_5"
@@ -128,19 +132,22 @@ async def realtime_conversation(websocket: WebSocket):
                 
                 # Forward audio task
                 async def forward():
-                    nonlocal audio_chunks_sent
+                    nonlocal audio_chunks_sent, first_audio_time
                     try:
                         async for msg in tts:
                             if should_stop or stop_tts: 
-                                logger.info("TTS interrupted by user")
+                                logger.info(f">>> TTS STOPPED (sent {audio_chunks_sent} chunks)")
                                 break
                             try:
                                 d = json.loads(msg)
                                 if d.get("audio"):
+                                    if first_audio_time is None:
+                                        first_audio_time = time.time()
+                                        if start_time:
+                                            logger.info(f">>> FIRST AUDIO {(first_audio_time-start_time)*1000:.0f}ms after process start")
                                     await websocket.send_json({"type": "audio", "data": d["audio"]})
                                     audio_chunks_sent += 1
-                                    # Update audio timer as we send - each chunk adds ~0.1s of playback
-                                    state["audio_playing_until"] = time.time() + 2.0  # Reset to 2s from now
+                                    state["audio_playing_until"] = time.time() + 2.0
                             except Exception as e: 
                                 logger.error(f"Audio forward error: {e}")
                     except Exception as e: 
@@ -227,12 +234,13 @@ async def realtime_conversation(websocket: WebSocket):
                 if not msg or should_stop:
                     return
                 
+                process_start = time.time()
                 transcript_buffer = ""
                 stop_tts = False  # Reset for new response
                 
                 try:
                     await websocket.send_json({"type": "status", "status": "speaking"})
-                    await respond(msg)
+                    await respond(msg, process_start)
                     if not should_stop:
                         await websocket.send_json({"type": "status", "status": "listening"})
                 except Exception as e:
@@ -243,6 +251,10 @@ async def realtime_conversation(websocket: WebSocket):
                 
                 current_utterance = ""
                 last_process_time = 0
+                session_start = time.time()
+                
+                def ts():
+                    return f"[{(time.time() - session_start)*1000:.0f}ms]"
                 
                 try:
                     async for msg in dg:
@@ -250,10 +262,6 @@ async def realtime_conversation(websocket: WebSocket):
                         
                         data = json.loads(msg)
                         msg_type = data.get("type")
-                        
-                        # Log all message types for debugging
-                        if msg_type and msg_type != "Results":
-                            logger.info(f"DG event: {msg_type}")
                         
                         if msg_type == "Results":
                             alt = data.get("channel", {}).get("alternatives", [{}])[0]
@@ -267,7 +275,7 @@ async def realtime_conversation(websocket: WebSocket):
                             current_utterance += " " + t
                             last_transcript_time = time.time()
                             word_count = len(current_utterance.split())
-                            logger.info(f"Got ({word_count} words, speech_final={speech_final}): {current_utterance.strip()}")
+                            logger.info(f"{ts()} Got ({word_count}w, sf={speech_final}): {current_utterance.strip()[:50]}...")
                             
                             # Process if: speech_final OR enough words accumulated
                             should_process = speech_final or word_count >= 8
@@ -276,8 +284,9 @@ async def realtime_conversation(websocket: WebSocket):
                                 # Prevent rapid re-processing
                                 if time.time() - last_process_time < 0.5:
                                     continue
-                                    
-                                logger.info(f"Processing: {current_utterance.strip()}")
+                                
+                                interrupt_time = time.time()
+                                logger.info(f"{ts()} >>> INTERRUPT DETECTED - sending stop signal")
                                 last_process_time = time.time()
                                 
                                 # ALWAYS stop any current/pending response
@@ -289,8 +298,7 @@ async def realtime_conversation(websocket: WebSocket):
                                 if pending_process and not pending_process.done():
                                     pending_process.cancel()
                                 
-                                # Brief pause for cleanup
-                                await asyncio.sleep(0.05)
+                                logger.info(f"{ts()} >>> Starting new response (interrupt took {(time.time()-interrupt_time)*1000:.0f}ms)")
                                 
                                 # Set transcript and process
                                 transcript_buffer = current_utterance.strip()

@@ -195,8 +195,11 @@ async def realtime_conversation(websocket: WebSocket):
         
         if full_response:
             conversation.append({"role": "assistant", "content": full_response})
-        # Keep is_speaking true a bit longer to catch quick follow-ups
-        await asyncio.sleep(0.5)
+        # Keep is_speaking true for the remaining audio playback time
+        remaining = state["audio_playing_until"] - time.time()
+        if remaining > 0:
+            logger.info(f"Waiting {remaining:.1f}s for audio to finish playing")
+            await asyncio.sleep(remaining)
         is_speaking = False
     
     try:

@@ -280,16 +280,17 @@ async def realtime_conversation(websocket: WebSocket):
                                 logger.info(f"Processing: {current_utterance.strip()}")
                                 last_process_time = time.time()
                                 
-                                # Stop any current response immediately
-                                if state["is_speaking"]:
-                                    stop_tts = True
-                                    state["audio_playing_until"] = 0
-                                    await websocket.send_json({"type": "interrupt"})
-                                    await asyncio.sleep(0.1)
+                                # ALWAYS stop any current/pending response
+                                stop_tts = True
+                                state["audio_playing_until"] = 0
+                                await websocket.send_json({"type": "interrupt"})  # Stop frontend audio
                                 
                                 # Cancel pending process
                                 if pending_process and not pending_process.done():
                                     pending_process.cancel()
+                                
+                                # Brief pause for cleanup
+                                await asyncio.sleep(0.05)
                                 
                                 # Set transcript and process
                                 transcript_buffer = current_utterance.strip()

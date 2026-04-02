@@ -179,9 +179,9 @@ async def realtime_conversation(websocket: WebSocket):
                         await asyncio.wait_for(audio_task, timeout=15.0)
                     except asyncio.TimeoutError:
                         audio_task.cancel()
-                    # Estimate how long audio will play (be generous - 0.1s per chunk)
-                    state["audio_playing_until"] = time.time() + (audio_chunks_sent * 0.1) + 1.0
-                    logger.info(f"Audio sent: {audio_chunks_sent} chunks, playing until +{audio_chunks_sent * 0.1 + 1.0:.1f}s")
+                    # Add extra buffer time AFTER all chunks sent - audio still playing in browser
+                    state["audio_playing_until"] = time.time() + 3.0
+                    logger.info(f"Audio sent: {audio_chunks_sent} chunks, playing until +3.0s more")
                 else:
                     # Interrupted - let current chunks finish playing briefly
                     await asyncio.sleep(0.3)

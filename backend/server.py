@@ -242,14 +242,20 @@ async def realtime_conversation(websocket: WebSocket):
                 nonlocal transcript_buffer, should_stop, last_transcript_time, pending_process, stop_tts
                 
                 current_utterance = ""
+                last_process_time = 0
                 
                 try:
                     async for msg in dg:
                         if should_stop: break
                         
                         data = json.loads(msg)
+                        msg_type = data.get("type")
                         
-                        if data.get("type") == "Results":
+                        # Log all message types for debugging
+                        if msg_type and msg_type != "Results":
+                            logger.info(f"DG event: {msg_type}")
+                        
+                        if msg_type == "Results":
                             alt = data.get("channel", {}).get("alternatives", [{}])[0]
                             t = alt.get("transcript", "")
                             is_final = data.get("is_final", False)
@@ -261,19 +267,25 @@ async def realtime_conversation(websocket: WebSocket):
                             current_utterance += " " + t
                             last_transcript_time = time.time()
                             word_count = len(current_utterance.split())
-                            logger.info(f"Got ({word_count} words): {current_utterance.strip()}")
+                            logger.info(f"Got ({word_count} words, speech_final={speech_final}): {current_utterance.strip()}")
                             
-                            # 4+ words = real speech (filters echo which is usually 1-3 words)
-                            # speech_final = user paused
-                            if speech_final and word_count >= 4:
+                            # Process if: speech_final OR enough words accumulated
+                            should_process = speech_final or word_count >= 8
+                            
+                            if should_process and word_count >= 4:
+                                # Prevent rapid re-processing
+                                if time.time() - last_process_time < 0.5:
+                                    continue
+                                    
                                 logger.info(f"Processing: {current_utterance.strip()}")
+                                last_process_time = time.time()
                                 
                                 # Stop any current response immediately
                                 if state["is_speaking"]:
                                     stop_tts = True
                                     state["audio_playing_until"] = 0
-                                    await websocket.send_json({"type": "interrupt"})  # Tell frontend to stop audio
-                                    await asyncio.sleep(0.1)  # Brief pause for cleanup
+                                    await websocket.send_json({"type": "interrupt"})
+                                    await asyncio.sleep(0.1)
                                 
                                 # Cancel pending process
                                 if pending_process and not pending_process.done():

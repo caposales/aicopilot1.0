@@ -64,16 +64,18 @@ async def realtime_conversation(websocket: WebSocket):
         system_prompt = 'You are a helpful assistant. Be conversational and natural. Give complete but concise answers.'
         initial_message = 'Hello!'
     
-    is_speaking = False
+    state = {
+        "audio_playing_until": 0,
+        "is_speaking": False,
+        "processing_lock": False
+    }
     should_stop = False
     transcript_buffer = ""
     conversation = []
-    stop_tts = False  # Signal to stop TTS on interrupt
-    state = {"audio_playing_until": 0}  # Use dict for mutable state sharing
+    stop_tts = False
     
     async def speak(text):
-        nonlocal is_speaking
-        is_speaking = True
+        state["is_speaking"] = True
         try:
             uri = f"wss://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream-input?model_id=eleven_flash_v2_5"
             async with websockets.connect(uri) as tts:
@@ -102,11 +104,11 @@ async def realtime_conversation(websocket: WebSocket):
             logger.error(f"TTS error: {e}")
         finally:
             await asyncio.sleep(0.5)  # Cooldown to prevent echo pickup
-            is_speaking = False
+            state["is_speaking"] = False
     
     async def respond(user_msg):
-        nonlocal is_speaking, conversation, stop_tts
-        is_speaking = True
+        nonlocal conversation, stop_tts
+        state["is_speaking"] = True
         stop_tts = False
         conversation.append({"role": "user", "content": user_msg})
         
@@ -200,7 +202,7 @@ async def realtime_conversation(websocket: WebSocket):
         if remaining > 0:
             logger.info(f"Waiting {remaining:.1f}s for audio to finish playing")
             await asyncio.sleep(remaining)
-        is_speaking = False
+        state["is_speaking"] = False
     
     try:
         # Use Deepgram's endpointing + utterance detection for natural turn-taking
@@ -220,24 +222,24 @@ async def realtime_conversation(websocket: WebSocket):
             
             response_task = None
             last_transcript_time = 0
-            processing_lock = False
+            state["processing_lock"] = False
             pending_process = None
             
             async def process():
-                nonlocal transcript_buffer, last_transcript_time, processing_lock, pending_process
+                nonlocal transcript_buffer, last_transcript_time, pending_process
                 
                 # Brief delay to batch any final words
                 await asyncio.sleep(0.3)
                 
                 # Prevent multiple simultaneous responses
-                if processing_lock or is_speaking:
+                if state["processing_lock"] or is_speaking:
                     return
                 
                 msg = transcript_buffer.strip()
                 if not msg or len(msg.split()) < 2 or should_stop:
                     return
                 
-                processing_lock = True
+                state["processing_lock"] = True
                 transcript_buffer = ""
                 pending_process = None
                 
@@ -251,7 +253,7 @@ async def realtime_conversation(websocket: WebSocket):
                 except Exception as e:
                     logger.error(f"Process error: {e}")
                 finally:
-                    processing_lock = False
+                    state["processing_lock"] = False
             
             async def handle_dg():
                 nonlocal transcript_buffer, response_task, should_stop, last_transcript_time, pending_process, stop_tts
@@ -261,7 +263,7 @@ async def realtime_conversation(websocket: WebSocket):
                 
                 def is_ai_busy():
                     """Check if AI is speaking or audio is still playing"""
-                    return is_speaking or processing_lock or time.time() < state["audio_playing_until"]
+                    return state["is_speaking"] or state["processing_lock"] or time.time() < state["audio_playing_until"]
                 
                 try:
                     async for msg in dg:

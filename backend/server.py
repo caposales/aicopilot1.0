@@ -174,7 +174,7 @@ async def realtime_conversation(websocket: WebSocket):
         
         if full_response:
             conversation.append({"role": "assistant", "content": full_response})
-        await asyncio.sleep(0.3)  # Brief cooldown
+        await asyncio.sleep(0.8)  # Cooldown - give time for queued speech to accumulate
         is_speaking = False
     
     try:
@@ -242,7 +242,16 @@ async def realtime_conversation(websocket: WebSocket):
                         
                         # UtteranceEnd = speaker finished talking
                         if data.get("type") == "UtteranceEnd":
-                            if current_utterance.strip() and not is_speaking and not processing_lock:
+                            # If we have queued question and AI stopped, process it
+                            if queued_question.strip() and not is_speaking and not processing_lock:
+                                logger.info(f"UtteranceEnd - processing queued: {queued_question.strip()}")
+                                transcript_buffer = queued_question
+                                queued_question = ""
+                                current_utterance = ""
+                                if pending_process and not pending_process.done():
+                                    pending_process.cancel()
+                                pending_process = asyncio.create_task(process())
+                            elif current_utterance.strip() and not is_speaking and not processing_lock:
                                 logger.info(f"UtteranceEnd - processing: {current_utterance.strip()}")
                                 transcript_buffer = current_utterance
                                 current_utterance = ""
@@ -262,32 +271,29 @@ async def realtime_conversation(websocket: WebSocket):
                                 
                             last_transcript_time = time.time()
                             
-                            # If AI is speaking, collect as potential follow-up question
+                            # If AI is speaking/processing, queue the question
                             if is_speaking or processing_lock:
                                 if is_final:
                                     queued_question += " " + t
                                     word_count = len(queued_question.split())
-                                    logger.info(f"Queued question ({word_count} words): {queued_question.strip()}")
-                                    
-                                    # If it's a substantial question (5+ words), queue it for after AI finishes
-                                    # Don't interrupt - let AI finish, then answer the new question
+                                    logger.info(f"Queued ({word_count} words): {queued_question.strip()}")
                             else:
-                                # AI not speaking - check if we have a queued question from during AI speech
-                                if queued_question.strip() and len(queued_question.split()) >= 3:
-                                    # Add queued question to current utterance
-                                    current_utterance = queued_question + " " + t if is_final else queued_question
-                                    queued_question = ""
-                                    logger.info(f"Processing queued + new: {current_utterance.strip()}")
-                                elif is_final:
-                                    current_utterance += " " + t
-                                    logger.info(f"Accumulated: {current_utterance.strip()}")
+                                # AI not speaking
+                                if is_final:
+                                    # If we have queued content, prepend it
+                                    if queued_question.strip():
+                                        current_utterance = queued_question + " " + t
+                                        queued_question = ""
+                                        logger.info(f"Merged queued + new: {current_utterance.strip()}")
+                                    else:
+                                        current_utterance += " " + t
+                                        logger.info(f"Accumulated: {current_utterance.strip()}")
                                 
-                                # speech_final means VAD detected end of speech segment
-                                if speech_final and len(current_utterance.split()) >= 2:
-                                    logger.info(f"speech_final - triggering process")
+                                # speech_final = user stopped speaking, process now
+                                if speech_final and current_utterance.strip() and len(current_utterance.split()) >= 2:
+                                    logger.info(f"speech_final - processing: {current_utterance.strip()}")
                                     transcript_buffer = current_utterance
                                     current_utterance = ""
-                                    queued_question = ""
                                     if pending_process and not pending_process.done():
                                         pending_process.cancel()
                                     pending_process = asyncio.create_task(process())

@@ -202,15 +202,20 @@ async def realtime_conversation(websocket: WebSocket):
             processing_lock = False
             pending_process = None
             interrupt_buffer = ""  # Collect speech during AI talking
+            post_interrupt_cooldown = 0  # Time to wait after interrupt before processing
             
             async def process():
-                nonlocal transcript_buffer, last_transcript_time, processing_lock, pending_process
+                nonlocal transcript_buffer, last_transcript_time, processing_lock, pending_process, post_interrupt_cooldown
                 
                 # Wait 1s for user to finish speaking
                 await asyncio.sleep(1.0)
                 
                 # If new speech came in during the wait, abort
                 if time.time() - last_transcript_time < 0.9:
+                    return
+                
+                # If we're in post-interrupt cooldown, wait longer
+                if time.time() < post_interrupt_cooldown:
                     return
                 
                 # Prevent multiple simultaneous responses
@@ -239,7 +244,7 @@ async def realtime_conversation(websocket: WebSocket):
                     processing_lock = False
             
             async def handle_dg():
-                nonlocal transcript_buffer, response_task, should_stop, last_transcript_time, pending_process, interrupt_buffer, stop_tts
+                nonlocal transcript_buffer, response_task, should_stop, last_transcript_time, pending_process, interrupt_buffer, stop_tts, post_interrupt_cooldown
                 try:
                     async for msg in dg:
                         if should_stop: break
@@ -266,6 +271,8 @@ async def realtime_conversation(websocket: WebSocket):
                                         # Move interrupt to transcript buffer for next response
                                         transcript_buffer = interrupt_buffer
                                         interrupt_buffer = ""
+                                        # Set cooldown - wait 1.5s after interrupt for user to finish
+                                        post_interrupt_cooldown = time.time() + 1.5
                                 else:
                                     # Clear interrupt buffer when AI not speaking
                                     interrupt_buffer = ""

@@ -67,6 +67,7 @@ async def realtime_conversation(websocket: WebSocket):
     transcript_buffer = ""
     conversation = []
     stop_tts = False  # Signal to stop TTS on interrupt
+    audio_playing_until = 0  # Timestamp until which audio is likely still playing
     
     async def speak(text):
         nonlocal is_speaking
@@ -102,13 +103,14 @@ async def realtime_conversation(websocket: WebSocket):
             is_speaking = False
     
     async def respond(user_msg):
-        nonlocal is_speaking, conversation, stop_tts
+        nonlocal is_speaking, conversation, stop_tts, audio_playing_until
         is_speaking = True
         stop_tts = False
         conversation.append({"role": "user", "content": user_msg})
         
         messages = [{"role": "system", "content": system_prompt}] + conversation[-6:]
         full_response = ""
+        audio_chunks_sent = 0
         
         try:
             uri = f"wss://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream-input?model_id=eleven_flash_v2_5"
@@ -122,6 +124,7 @@ async def realtime_conversation(websocket: WebSocket):
                 
                 # Forward audio task
                 async def forward():
+                    nonlocal audio_chunks_sent
                     try:
                         async for msg in tts:
                             if should_stop or stop_tts: 
@@ -131,6 +134,7 @@ async def realtime_conversation(websocket: WebSocket):
                                 d = json.loads(msg)
                                 if d.get("audio"):
                                     await websocket.send_json({"type": "audio", "data": d["audio"]})
+                                    audio_chunks_sent += 1
                             except Exception as e: 
                                 logger.error(f"Audio forward error: {e}")
                     except Exception as e: 
@@ -175,6 +179,10 @@ async def realtime_conversation(websocket: WebSocket):
                     audio_task.cancel()
                 
                 await websocket.send_json({"type": "audio_end"})
+                
+                # Estimate how long audio will play (each chunk ~0.1s of audio)
+                audio_playing_until = time.time() + (audio_chunks_sent * 0.08)
+                
         except Exception as e:
             logger.error(f"Respond error: {e}")
         
@@ -234,10 +242,14 @@ async def realtime_conversation(websocket: WebSocket):
                     processing_lock = False
             
             async def handle_dg():
-                nonlocal transcript_buffer, response_task, should_stop, last_transcript_time, pending_process, stop_tts
+                nonlocal transcript_buffer, response_task, should_stop, last_transcript_time, pending_process, stop_tts, audio_playing_until
                 
                 current_utterance = ""
                 interrupt_speech = ""  # What user says while AI is talking
+                
+                def is_ai_busy():
+                    """Check if AI is speaking or audio is still playing"""
+                    return is_speaking or processing_lock or time.time() < audio_playing_until
                 
                 try:
                     async for msg in dg:
@@ -247,7 +259,7 @@ async def realtime_conversation(websocket: WebSocket):
                         
                         # UtteranceEnd = speaker finished talking
                         if data.get("type") == "UtteranceEnd":
-                            if current_utterance.strip() and not is_speaking and not processing_lock:
+                            if current_utterance.strip() and not is_ai_busy():
                                 logger.info(f"UtteranceEnd - processing: {current_utterance.strip()}")
                                 transcript_buffer = current_utterance
                                 current_utterance = ""
@@ -267,8 +279,8 @@ async def realtime_conversation(websocket: WebSocket):
                                 
                             last_transcript_time = time.time()
                             
-                            # If AI is speaking, collect interrupt and STOP AI when ready
-                            if is_speaking or processing_lock:
+                            # If AI is busy (speaking or audio playing), collect as interrupt
+                            if is_ai_busy():
                                 if is_final:
                                     interrupt_speech += " " + t
                                     word_count = len(interrupt_speech.split())
@@ -278,12 +290,11 @@ async def realtime_conversation(websocket: WebSocket):
                                     if word_count >= 5:
                                         logger.info(f"STOPPING AI to answer: {interrupt_speech.strip()}")
                                         stop_tts = True
-                                        # Set up the interrupt as next thing to process
+                                        audio_playing_until = 0  # Clear the audio timer
                                         current_utterance = interrupt_speech
                                         interrupt_speech = ""
                             else:
-                                # AI not speaking - normal accumulation
-                                # If we have interrupt speech that didn't trigger (< 5 words), add it
+                                # AI not busy - normal flow
                                 if interrupt_speech.strip():
                                     current_utterance = interrupt_speech
                                     interrupt_speech = ""
@@ -292,7 +303,6 @@ async def realtime_conversation(websocket: WebSocket):
                                     current_utterance += " " + t
                                     logger.info(f"Accumulated: {current_utterance.strip()}")
                                 
-                                # speech_final = user stopped speaking
                                 if speech_final and current_utterance.strip() and len(current_utterance.split()) >= 2:
                                     logger.info(f"speech_final - processing: {current_utterance.strip()}")
                                     transcript_buffer = current_utterance

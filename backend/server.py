@@ -313,7 +313,7 @@ async def realtime_conversation(websocket: WebSocket):
                                         interrupt_speech = ""
                             else:
                                 # AI not busy - normal flow
-                                logger.info(f"[NOT BUSY] is_speaking={is_speaking}, processing_lock={processing_lock}, audio_until={state['audio_playing_until'] - time.time():.1f}s")
+                                logger.info(f"[NOT BUSY] is_speaking={state['is_speaking']}, processing_lock={state['processing_lock']}, audio_until={state['audio_playing_until'] - time.time():.1f}s")
                                 if interrupt_speech.strip():
                                     current_utterance = interrupt_speech
                                     interrupt_speech = ""

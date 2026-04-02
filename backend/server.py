@@ -197,11 +197,6 @@ async def realtime_conversation(websocket: WebSocket):
         
         if full_response:
             conversation.append({"role": "assistant", "content": full_response})
-        # Keep is_speaking true for the remaining audio playback time
-        remaining = state["audio_playing_until"] - time.time()
-        if remaining > 0:
-            logger.info(f"Waiting {remaining:.1f}s for audio to finish playing")
-            await asyncio.sleep(remaining)
         state["is_speaking"] = False
     
     try:
@@ -226,24 +221,14 @@ async def realtime_conversation(websocket: WebSocket):
             pending_process = None
             
             async def process():
-                nonlocal transcript_buffer, last_transcript_time, pending_process
-                
-                # Brief delay to batch any final words
-                await asyncio.sleep(0.3)
-                
-                # Prevent multiple simultaneous responses
-                if state["processing_lock"] or state["is_speaking"]:
-                    return
+                nonlocal transcript_buffer, pending_process, stop_tts
                 
                 msg = transcript_buffer.strip()
-                if not msg or len(msg.split()) < 2 or should_stop:
+                if not msg or should_stop:
                     return
                 
-                state["processing_lock"] = True
                 transcript_buffer = ""
-                pending_process = None
-                
-                logger.info(f"Processing: {msg}")
+                stop_tts = False  # Reset for new response
                 
                 try:
                     await websocket.send_json({"type": "status", "status": "speaking"})
@@ -252,18 +237,11 @@ async def realtime_conversation(websocket: WebSocket):
                         await websocket.send_json({"type": "status", "status": "listening"})
                 except Exception as e:
                     logger.error(f"Process error: {e}")
-                finally:
-                    state["processing_lock"] = False
             
             async def handle_dg():
-                nonlocal transcript_buffer, response_task, should_stop, last_transcript_time, pending_process, stop_tts
+                nonlocal transcript_buffer, should_stop, last_transcript_time, pending_process, stop_tts
                 
                 current_utterance = ""
-                interrupt_speech = ""  # What user says while AI is talking
-                
-                def is_ai_busy():
-                    """Check if AI is speaking or audio is still playing"""
-                    return state["is_speaking"] or state["processing_lock"] or time.time() < state["audio_playing_until"]
                 
                 try:
                     async for msg in dg:
@@ -271,72 +249,40 @@ async def realtime_conversation(websocket: WebSocket):
                         
                         data = json.loads(msg)
                         
-                        # UtteranceEnd = backup trigger if speech_final didn't fire
-                        if data.get("type") == "UtteranceEnd":
-                            # Only process if we have enough words (prevent partial sentences)
-                            if current_utterance.strip() and len(current_utterance.split()) >= 4 and not is_ai_busy():
-                                logger.info(f"UtteranceEnd - processing: {current_utterance.strip()}")
-                                transcript_buffer = current_utterance
-                                current_utterance = ""
-                                if pending_process and not pending_process.done():
-                                    pending_process.cancel()
-                                pending_process = asyncio.create_task(process())
-                            continue
-                        
                         if data.get("type") == "Results":
                             alt = data.get("channel", {}).get("alternatives", [{}])[0]
                             t = alt.get("transcript", "")
                             is_final = data.get("is_final", False)
                             speech_final = data.get("speech_final", False)
                             
-                            if not t:
+                            if not t or not is_final:
                                 continue
-                                
-                            last_transcript_time = time.time()
                             
-                            # If AI is busy (speaking or audio playing), collect as interrupt
-                            busy = is_ai_busy()
-                            if busy:
-                                if is_final:
-                                    interrupt_speech += " " + t
-                                    word_count = len(interrupt_speech.split())
-                                    logger.info(f"[BUSY] Interrupt ({word_count} words): {interrupt_speech.strip()}")
-                                    
-                                    # 4+ words = real follow-up question
-                                    # Stop generating MORE text, but let current audio finish
-                                    if word_count >= 4 and not stop_tts:
-                                        logger.info(f"User follow-up detected: {interrupt_speech.strip()}")
-                                        stop_tts = True  # Stop generating more LLM/TTS
-                                        state["audio_playing_until"] = 0  # Clear audio timer
-                                        # Queue this to be answered after current audio
-                                        current_utterance = interrupt_speech
-                                        interrupt_speech = ""
-                            else:
-                                # AI not busy - normal flow
-                                logger.info(f"[NOT BUSY] is_speaking={state['is_speaking']}, processing_lock={state['processing_lock']}, audio_until={state['audio_playing_until'] - time.time():.1f}s")
-                                if interrupt_speech.strip():
-                                    current_utterance = interrupt_speech
-                                    interrupt_speech = ""
+                            current_utterance += " " + t
+                            last_transcript_time = time.time()
+                            word_count = len(current_utterance.split())
+                            logger.info(f"Got ({word_count} words): {current_utterance.strip()}")
+                            
+                            # 4+ words = real speech (filters echo which is usually 1-3 words)
+                            # speech_final = user paused
+                            if speech_final and word_count >= 4:
+                                logger.info(f"Processing: {current_utterance.strip()}")
                                 
-                                if is_final:
-                                    current_utterance += " " + t
-                                    logger.info(f"Accumulated: {current_utterance.strip()}")
+                                # Stop any current response immediately
+                                if state["is_speaking"]:
+                                    stop_tts = True
+                                    state["audio_playing_until"] = 0
+                                    await websocket.send_json({"type": "interrupt"})  # Tell frontend to stop audio
+                                    await asyncio.sleep(0.1)  # Brief pause for cleanup
                                 
-                                # speech_final = VAD says user stopped, process now
-                                if speech_final and current_utterance.strip() and len(current_utterance.split()) >= 2:
-                                    # Double-check we're not busy before processing
-                                    if not is_ai_busy():
-                                        logger.info(f"speech_final - processing: {current_utterance.strip()}")
-                                        transcript_buffer = current_utterance
-                                        current_utterance = ""
-                                        if pending_process and not pending_process.done():
-                                            pending_process.cancel()
-                                        pending_process = asyncio.create_task(process())
-                                    else:
-                                        # AI still busy - treat as interrupt
-                                        logger.info(f"speech_final but AI busy - treating as interrupt: {current_utterance.strip()}")
-                                        interrupt_speech = current_utterance
-                                        current_utterance = ""
+                                # Cancel pending process
+                                if pending_process and not pending_process.done():
+                                    pending_process.cancel()
+                                
+                                # Set transcript and process
+                                transcript_buffer = current_utterance.strip()
+                                current_utterance = ""
+                                pending_process = asyncio.create_task(process())
                                 
                 except Exception as e:
                     logger.error(f"DG error: {e}")

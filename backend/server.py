@@ -66,7 +66,6 @@ async def realtime_conversation(websocket: WebSocket):
     should_stop = False
     transcript_buffer = ""
     conversation = []
-    stop_tts = False  # Signal to stop TTS on interrupt
     
     async def speak(text):
         nonlocal is_speaking
@@ -102,12 +101,11 @@ async def realtime_conversation(websocket: WebSocket):
             is_speaking = False
     
     async def respond(user_msg):
-        nonlocal is_speaking, conversation, stop_tts
+        nonlocal is_speaking, conversation
         is_speaking = True
-        stop_tts = False
         conversation.append({"role": "user", "content": user_msg})
         
-        messages = [{"role": "system", "content": system_prompt}] + conversation[-4:]
+        messages = [{"role": "system", "content": system_prompt}] + conversation[-6:]
         full_response = ""
         
         try:
@@ -124,8 +122,7 @@ async def realtime_conversation(websocket: WebSocket):
                 async def forward():
                     try:
                         async for msg in tts:
-                            if should_stop or stop_tts: 
-                                logger.info("TTS stopped - interrupt detected")
+                            if should_stop: 
                                 break
                             try:
                                 d = json.loads(msg)
@@ -144,12 +141,12 @@ async def realtime_conversation(websocket: WebSocket):
                         "POST",
                         "https://api.groq.com/openai/v1/chat/completions",
                         headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
-                        json={"model": "llama-3.1-8b-instant", "messages": messages, "max_tokens": 200, "stream": True},
+                        json={"model": "llama-3.1-8b-instant", "messages": messages, "max_tokens": 300, "stream": True},
                         timeout=30.0
                     ) as resp:
                         buf = ""
                         async for line in resp.aiter_lines():
-                            if should_stop or stop_tts: break
+                            if should_stop: break
                             if line.startswith("data: ") and "[DONE]" not in line:
                                 try:
                                     c = json.loads(line[6:]).get("choices", [{}])[0].get("delta", {}).get("content", "")
@@ -160,18 +157,15 @@ async def realtime_conversation(websocket: WebSocket):
                                             await tts.send(json.dumps({"text": buf, "try_trigger_generation": True}))
                                             buf = ""
                                 except: pass
-                        if buf and not stop_tts:
+                        if buf:
                             await tts.send(json.dumps({"text": buf, "try_trigger_generation": True}))
                 
                 await tts.send(json.dumps({"text": ""}))
                 
-                # Wait for audio to finish playing (unless interrupted)
-                if not stop_tts:
-                    try:
-                        await asyncio.wait_for(audio_task, timeout=10.0)
-                    except asyncio.TimeoutError:
-                        audio_task.cancel()
-                else:
+                # Wait for audio to finish playing
+                try:
+                    await asyncio.wait_for(audio_task, timeout=15.0)
+                except asyncio.TimeoutError:
                     audio_task.cancel()
                 
                 await websocket.send_json({"type": "audio_end"})
@@ -203,18 +197,12 @@ async def realtime_conversation(websocket: WebSocket):
             last_transcript_time = 0
             processing_lock = False
             pending_process = None
-            interrupt_buffer = ""  # Collect speech during AI talking
-            post_interrupt_cooldown = 0  # Time to wait after interrupt before processing
             
             async def process():
-                nonlocal transcript_buffer, last_transcript_time, processing_lock, pending_process, post_interrupt_cooldown
+                nonlocal transcript_buffer, last_transcript_time, processing_lock, pending_process
                 
                 # Brief delay to batch any final words
                 await asyncio.sleep(0.3)
-                
-                # If we're in post-interrupt cooldown, wait longer
-                if time.time() < post_interrupt_cooldown:
-                    await asyncio.sleep(post_interrupt_cooldown - time.time())
                 
                 # Prevent multiple simultaneous responses
                 if processing_lock or is_speaking:
@@ -241,9 +229,10 @@ async def realtime_conversation(websocket: WebSocket):
                     processing_lock = False
             
             async def handle_dg():
-                nonlocal transcript_buffer, response_task, should_stop, last_transcript_time, pending_process, interrupt_buffer, stop_tts, post_interrupt_cooldown
+                nonlocal transcript_buffer, response_task, should_stop, last_transcript_time, pending_process
                 
                 current_utterance = ""  # Build up the current utterance
+                queued_question = ""  # Question asked during AI response - answer AFTER current response
                 
                 try:
                     async for msg in dg:
@@ -251,10 +240,10 @@ async def realtime_conversation(websocket: WebSocket):
                         
                         data = json.loads(msg)
                         
-                        # UtteranceEnd = speaker finished talking, process now
+                        # UtteranceEnd = speaker finished talking
                         if data.get("type") == "UtteranceEnd":
-                            logger.info(f"UtteranceEnd - processing: {current_utterance.strip()}")
                             if current_utterance.strip() and not is_speaking and not processing_lock:
+                                logger.info(f"UtteranceEnd - processing: {current_utterance.strip()}")
                                 transcript_buffer = current_utterance
                                 current_utterance = ""
                                 if pending_process and not pending_process.done():
@@ -273,36 +262,35 @@ async def realtime_conversation(websocket: WebSocket):
                                 
                             last_transcript_time = time.time()
                             
-                            # If AI is speaking, check for interrupt
+                            # If AI is speaking, collect as potential follow-up question
                             if is_speaking or processing_lock:
                                 if is_final:
-                                    interrupt_buffer += " " + t
-                                    word_count = len(interrupt_buffer.split())
-                                    logger.info(f"Interrupt buffer ({word_count} words): {interrupt_buffer.strip()}")
+                                    queued_question += " " + t
+                                    word_count = len(queued_question.split())
+                                    logger.info(f"Queued question ({word_count} words): {queued_question.strip()}")
                                     
-                                    # 5+ words = real interrupt
-                                    if word_count >= 5:
-                                        logger.info(f"INTERRUPT! Stopping AI")
-                                        stop_tts = True
-                                        await websocket.send_json({"type": "interrupt"})
-                                        transcript_buffer = interrupt_buffer
-                                        interrupt_buffer = ""
-                                        post_interrupt_cooldown = time.time() + 1.5
+                                    # If it's a substantial question (5+ words), queue it for after AI finishes
+                                    # Don't interrupt - let AI finish, then answer the new question
                             else:
-                                # AI not speaking - accumulate speech
-                                interrupt_buffer = ""
-                                if is_final:
+                                # AI not speaking - check if we have a queued question from during AI speech
+                                if queued_question.strip() and len(queued_question.split()) >= 3:
+                                    # Add queued question to current utterance
+                                    current_utterance = queued_question + " " + t if is_final else queued_question
+                                    queued_question = ""
+                                    logger.info(f"Processing queued + new: {current_utterance.strip()}")
+                                elif is_final:
                                     current_utterance += " " + t
                                     logger.info(f"Accumulated: {current_utterance.strip()}")
-                                    
-                                    # speech_final means VAD detected end of speech segment
-                                    if speech_final and len(current_utterance.split()) >= 3:
-                                        logger.info(f"speech_final - triggering process")
-                                        transcript_buffer = current_utterance
-                                        current_utterance = ""
-                                        if pending_process and not pending_process.done():
-                                            pending_process.cancel()
-                                        pending_process = asyncio.create_task(process())
+                                
+                                # speech_final means VAD detected end of speech segment
+                                if speech_final and len(current_utterance.split()) >= 2:
+                                    logger.info(f"speech_final - triggering process")
+                                    transcript_buffer = current_utterance
+                                    current_utterance = ""
+                                    queued_question = ""
+                                    if pending_process and not pending_process.done():
+                                        pending_process.cancel()
+                                    pending_process = asyncio.create_task(process())
                                 
                 except Exception as e:
                     logger.error(f"DG error: {e}")

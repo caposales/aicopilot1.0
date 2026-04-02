@@ -55,11 +55,13 @@ async def realtime_conversation(websocket: WebSocket):
     try:
         config = await asyncio.wait_for(websocket.receive_json(), timeout=5)
         voice_id = config.get('voiceId', 'EXAVITQu4vr4xnSDxMaL')
-        system_prompt = config.get('systemPrompt', 'Be helpful and concise. One sentence max.')
+        base_prompt = config.get('systemPrompt', 'You are a helpful assistant.')
+        # Add conversational guidance
+        system_prompt = base_prompt + " Be conversational and natural. Give complete but concise answers. If the user asks a follow-up question, smoothly address it."
         initial_message = config.get('initialMessage', 'Hello!')
     except:
         voice_id = 'EXAVITQu4vr4xnSDxMaL'
-        system_prompt = 'Be helpful and concise.'
+        system_prompt = 'You are a helpful assistant. Be conversational and natural. Give complete but concise answers.'
         initial_message = 'Hello!'
     
     is_speaking = False
@@ -175,13 +177,15 @@ async def realtime_conversation(websocket: WebSocket):
                         await asyncio.wait_for(audio_task, timeout=15.0)
                     except asyncio.TimeoutError:
                         audio_task.cancel()
+                    # Estimate how long audio will play
+                    audio_playing_until = time.time() + (audio_chunks_sent * 0.05)
                 else:
+                    # Interrupted - let current chunks finish playing briefly
+                    await asyncio.sleep(0.3)
                     audio_task.cancel()
+                    audio_playing_until = 0
                 
                 await websocket.send_json({"type": "audio_end"})
-                
-                # Estimate how long audio will play (each chunk ~0.1s of audio)
-                audio_playing_until = time.time() + (audio_chunks_sent * 0.08)
                 
         except Exception as e:
             logger.error(f"Respond error: {e}")
@@ -279,20 +283,14 @@ async def realtime_conversation(websocket: WebSocket):
                                     word_count = len(interrupt_speech.split())
                                     logger.info(f"Interrupt ({word_count} words): {interrupt_speech.strip()}")
                                     
-                                    # 4+ words = real question, stop AI and answer it NOW
-                                    if word_count >= 4:
-                                        logger.info(f"STOPPING AI to answer: {interrupt_speech.strip()}")
-                                        stop_tts = True
-                                        audio_playing_until = 0  # Clear the audio timer
-                                        # Tell frontend to stop playing audio immediately
-                                        await websocket.send_json({"type": "interrupt"})
-                                        # Process the interrupt right away
-                                        transcript_buffer = interrupt_speech
+                                    # 4+ words = real follow-up question
+                                    # Stop generating MORE text, but let current audio finish
+                                    if word_count >= 4 and not stop_tts:
+                                        logger.info(f"User follow-up detected: {interrupt_speech.strip()}")
+                                        stop_tts = True  # Stop generating more LLM/TTS
+                                        # Queue this to be answered after current audio
+                                        current_utterance = interrupt_speech
                                         interrupt_speech = ""
-                                        current_utterance = ""
-                                        if pending_process and not pending_process.done():
-                                            pending_process.cancel()
-                                        pending_process = asyncio.create_task(process())
                             else:
                                 # AI not busy - normal flow
                                 if interrupt_speech.strip():

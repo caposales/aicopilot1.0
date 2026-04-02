@@ -69,7 +69,7 @@ async def realtime_conversation(websocket: WebSocket):
     transcript_buffer = ""
     conversation = []
     stop_tts = False  # Signal to stop TTS on interrupt
-    audio_playing_until = 0  # Timestamp until which audio is likely still playing
+    state = {"audio_playing_until": 0}  # Use dict for mutable state sharing
     
     async def speak(text):
         nonlocal is_speaking
@@ -105,7 +105,7 @@ async def realtime_conversation(websocket: WebSocket):
             is_speaking = False
     
     async def respond(user_msg):
-        nonlocal is_speaking, conversation, stop_tts, audio_playing_until
+        nonlocal is_speaking, conversation, stop_tts
         is_speaking = True
         stop_tts = False
         conversation.append({"role": "user", "content": user_msg})
@@ -178,13 +178,13 @@ async def realtime_conversation(websocket: WebSocket):
                     except asyncio.TimeoutError:
                         audio_task.cancel()
                     # Estimate how long audio will play (be generous - 0.1s per chunk)
-                    audio_playing_until = time.time() + (audio_chunks_sent * 0.1) + 1.0
+                    state["audio_playing_until"] = time.time() + (audio_chunks_sent * 0.1) + 1.0
                     logger.info(f"Audio sent: {audio_chunks_sent} chunks, playing until +{audio_chunks_sent * 0.1 + 1.0:.1f}s")
                 else:
                     # Interrupted - let current chunks finish playing briefly
                     await asyncio.sleep(0.3)
                     audio_task.cancel()
-                    audio_playing_until = 0
+                    state["audio_playing_until"] = 0
                 
                 await websocket.send_json({"type": "audio_end"})
                 
@@ -249,14 +249,14 @@ async def realtime_conversation(websocket: WebSocket):
                     processing_lock = False
             
             async def handle_dg():
-                nonlocal transcript_buffer, response_task, should_stop, last_transcript_time, pending_process, stop_tts, audio_playing_until
+                nonlocal transcript_buffer, response_task, should_stop, last_transcript_time, pending_process, stop_tts
                 
                 current_utterance = ""
                 interrupt_speech = ""  # What user says while AI is talking
                 
                 def is_ai_busy():
                     """Check if AI is speaking or audio is still playing"""
-                    return is_speaking or processing_lock or time.time() < audio_playing_until
+                    return is_speaking or processing_lock or time.time() < state["audio_playing_until"]
                 
                 try:
                     async for msg in dg:
@@ -300,12 +300,13 @@ async def realtime_conversation(websocket: WebSocket):
                                     if word_count >= 4 and not stop_tts:
                                         logger.info(f"User follow-up detected: {interrupt_speech.strip()}")
                                         stop_tts = True  # Stop generating more LLM/TTS
+                                        state["audio_playing_until"] = 0  # Clear audio timer
                                         # Queue this to be answered after current audio
                                         current_utterance = interrupt_speech
                                         interrupt_speech = ""
                             else:
                                 # AI not busy - normal flow
-                                logger.info(f"[NOT BUSY] is_speaking={is_speaking}, processing_lock={processing_lock}, audio_until={audio_playing_until - time.time():.1f}s")
+                                logger.info(f"[NOT BUSY] is_speaking={is_speaking}, processing_lock={processing_lock}, audio_until={state['audio_playing_until'] - time.time():.1f}s")
                                 if interrupt_speech.strip():
                                     current_utterance = interrupt_speech
                                     interrupt_speech = ""

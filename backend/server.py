@@ -137,6 +137,8 @@ async def realtime_conversation(websocket: WebSocket):
                                 if d.get("audio"):
                                     await websocket.send_json({"type": "audio", "data": d["audio"]})
                                     audio_chunks_sent += 1
+                                    # Update audio timer as we send - each chunk adds ~0.1s of playback
+                                    state["audio_playing_until"] = time.time() + 2.0  # Reset to 2s from now
                             except Exception as e: 
                                 logger.error(f"Audio forward error: {e}")
                     except Exception as e: 

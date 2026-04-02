@@ -257,15 +257,8 @@ async def realtime_conversation(websocket: WebSocket):
                         
                         data = json.loads(msg)
                         
-                        # UtteranceEnd = speaker finished talking
+                        # Skip UtteranceEnd - we only care about speech_final
                         if data.get("type") == "UtteranceEnd":
-                            if current_utterance.strip() and not is_ai_busy():
-                                logger.info(f"UtteranceEnd - processing: {current_utterance.strip()}")
-                                transcript_buffer = current_utterance
-                                current_utterance = ""
-                                if pending_process and not pending_process.done():
-                                    pending_process.cancel()
-                                pending_process = asyncio.create_task(process())
                             continue
                         
                         if data.get("type") == "Results":
@@ -286,8 +279,8 @@ async def realtime_conversation(websocket: WebSocket):
                                     word_count = len(interrupt_speech.split())
                                     logger.info(f"Interrupt ({word_count} words): {interrupt_speech.strip()}")
                                     
-                                    # 5+ words = real question, stop AI and answer it
-                                    if word_count >= 5:
+                                    # 4+ words = real question, stop AI and answer it
+                                    if word_count >= 4:
                                         logger.info(f"STOPPING AI to answer: {interrupt_speech.strip()}")
                                         stop_tts = True
                                         audio_playing_until = 0  # Clear the audio timer
@@ -303,6 +296,7 @@ async def realtime_conversation(websocket: WebSocket):
                                     current_utterance += " " + t
                                     logger.info(f"Accumulated: {current_utterance.strip()}")
                                 
+                                # speech_final = VAD says user stopped, process now
                                 if speech_final and current_utterance.strip() and len(current_utterance.split()) >= 2:
                                     logger.info(f"speech_final - processing: {current_utterance.strip()}")
                                     transcript_buffer = current_utterance

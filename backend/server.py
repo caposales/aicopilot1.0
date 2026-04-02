@@ -184,11 +184,13 @@ async def realtime_conversation(websocket: WebSocket):
         is_speaking = False
     
     try:
+        # Use Deepgram's endpointing + utterance detection for natural turn-taking
+        dg_url = "wss://api.deepgram.com/v1/listen?encoding=linear16&sample_rate=16000&channels=1&endpointing=300&utterance_end_ms=1000&interim_results=true&punctuate=true"
         async with websockets.connect(
-            "wss://api.deepgram.com/v1/listen",
+            dg_url,
             additional_headers={"Authorization": f"Token {deepgram_key}"}
         ) as dg:
-            logger.info("Connected to Deepgram")
+            logger.info("Connected to Deepgram with endpointing")
             await websocket.send_json({"type": "connected"})
             
             # Greeting
@@ -207,24 +209,19 @@ async def realtime_conversation(websocket: WebSocket):
             async def process():
                 nonlocal transcript_buffer, last_transcript_time, processing_lock, pending_process, post_interrupt_cooldown
                 
-                # Wait 1s for user to finish speaking
-                await asyncio.sleep(1.0)
-                
-                # If new speech came in during the wait, abort
-                if time.time() - last_transcript_time < 0.9:
-                    return
+                # Brief delay to batch any final words
+                await asyncio.sleep(0.3)
                 
                 # If we're in post-interrupt cooldown, wait longer
                 if time.time() < post_interrupt_cooldown:
-                    return
+                    await asyncio.sleep(post_interrupt_cooldown - time.time())
                 
                 # Prevent multiple simultaneous responses
                 if processing_lock or is_speaking:
                     return
                 
                 msg = transcript_buffer.strip()
-                # Require at least 3 words to process
-                if not msg or len(msg.split()) < 3 or should_stop:
+                if not msg or len(msg.split()) < 2 or should_stop:
                     return
                 
                 processing_lock = True
@@ -245,41 +242,67 @@ async def realtime_conversation(websocket: WebSocket):
             
             async def handle_dg():
                 nonlocal transcript_buffer, response_task, should_stop, last_transcript_time, pending_process, interrupt_buffer, stop_tts, post_interrupt_cooldown
+                
+                current_utterance = ""  # Build up the current utterance
+                
                 try:
                     async for msg in dg:
                         if should_stop: break
                         
                         data = json.loads(msg)
                         
+                        # UtteranceEnd = speaker finished talking, process now
+                        if data.get("type") == "UtteranceEnd":
+                            logger.info(f"UtteranceEnd - processing: {current_utterance.strip()}")
+                            if current_utterance.strip() and not is_speaking and not processing_lock:
+                                transcript_buffer = current_utterance
+                                current_utterance = ""
+                                if pending_process and not pending_process.done():
+                                    pending_process.cancel()
+                                pending_process = asyncio.create_task(process())
+                            continue
+                        
                         if data.get("type") == "Results":
-                            t = data.get("channel", {}).get("alternatives", [{}])[0].get("transcript", "")
-                            if t and data.get("is_final"):
-                                last_transcript_time = time.time()
-                                logger.info(f"Got: {t}")
+                            alt = data.get("channel", {}).get("alternatives", [{}])[0]
+                            t = alt.get("transcript", "")
+                            is_final = data.get("is_final", False)
+                            speech_final = data.get("speech_final", False)
+                            
+                            if not t:
+                                continue
                                 
-                                # If AI is speaking, collect as potential interrupt
-                                if is_speaking or processing_lock:
+                            last_transcript_time = time.time()
+                            
+                            # If AI is speaking, check for interrupt
+                            if is_speaking or processing_lock:
+                                if is_final:
                                     interrupt_buffer += " " + t
                                     word_count = len(interrupt_buffer.split())
                                     logger.info(f"Interrupt buffer ({word_count} words): {interrupt_buffer.strip()}")
                                     
-                                    # Real interrupt = 5+ words (echo is usually 1-3 words)
+                                    # 5+ words = real interrupt
                                     if word_count >= 5:
                                         logger.info(f"INTERRUPT! Stopping AI")
-                                        stop_tts = True  # Stop the TTS
+                                        stop_tts = True
                                         await websocket.send_json({"type": "interrupt"})
-                                        # Move interrupt to transcript buffer for next response
                                         transcript_buffer = interrupt_buffer
                                         interrupt_buffer = ""
-                                        # Set cooldown - wait 1.5s after interrupt for user to finish
                                         post_interrupt_cooldown = time.time() + 1.5
-                                else:
-                                    # Clear interrupt buffer when AI not speaking
-                                    interrupt_buffer = ""
-                                    transcript_buffer += " " + t
-                                    if pending_process and not pending_process.done(): 
-                                        pending_process.cancel()
-                                    pending_process = asyncio.create_task(process())
+                            else:
+                                # AI not speaking - accumulate speech
+                                interrupt_buffer = ""
+                                if is_final:
+                                    current_utterance += " " + t
+                                    logger.info(f"Accumulated: {current_utterance.strip()}")
+                                    
+                                    # speech_final means VAD detected end of speech segment
+                                    if speech_final and len(current_utterance.split()) >= 3:
+                                        logger.info(f"speech_final - triggering process")
+                                        transcript_buffer = current_utterance
+                                        current_utterance = ""
+                                        if pending_process and not pending_process.done():
+                                            pending_process.cancel()
+                                        pending_process = asyncio.create_task(process())
                                 
                 except Exception as e:
                     logger.error(f"DG error: {e}")

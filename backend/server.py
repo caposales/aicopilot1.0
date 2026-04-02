@@ -192,6 +192,8 @@ async def realtime_conversation(websocket: WebSocket):
         
         if full_response:
             conversation.append({"role": "assistant", "content": full_response})
+        # Keep is_speaking true a bit longer to catch quick follow-ups
+        await asyncio.sleep(0.5)
         is_speaking = False
     
     try:
@@ -263,7 +265,8 @@ async def realtime_conversation(websocket: WebSocket):
                         
                         # UtteranceEnd = backup trigger if speech_final didn't fire
                         if data.get("type") == "UtteranceEnd":
-                            if current_utterance.strip() and not is_ai_busy():
+                            # Only process if we have enough words (prevent partial sentences)
+                            if current_utterance.strip() and len(current_utterance.split()) >= 4 and not is_ai_busy():
                                 logger.info(f"UtteranceEnd - processing: {current_utterance.strip()}")
                                 transcript_buffer = current_utterance
                                 current_utterance = ""

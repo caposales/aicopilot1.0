@@ -232,7 +232,7 @@ async def realtime_conversation(websocket: WebSocket):
                 await asyncio.sleep(0.3)
                 
                 # Prevent multiple simultaneous responses
-                if state["processing_lock"] or is_speaking:
+                if state["processing_lock"] or state["is_speaking"]:
                     return
                 
                 msg = transcript_buffer.strip()

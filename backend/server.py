@@ -261,8 +261,15 @@ async def realtime_conversation(websocket: WebSocket):
                         
                         data = json.loads(msg)
                         
-                        # Skip UtteranceEnd - we only care about speech_final
+                        # UtteranceEnd = backup trigger if speech_final didn't fire
                         if data.get("type") == "UtteranceEnd":
+                            if current_utterance.strip() and not is_ai_busy():
+                                logger.info(f"UtteranceEnd - processing: {current_utterance.strip()}")
+                                transcript_buffer = current_utterance
+                                current_utterance = ""
+                                if pending_process and not pending_process.done():
+                                    pending_process.cancel()
+                                pending_process = asyncio.create_task(process())
                             continue
                         
                         if data.get("type") == "Results":

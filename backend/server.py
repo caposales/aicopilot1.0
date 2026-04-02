@@ -185,7 +185,7 @@ async def realtime_conversation(websocket: WebSocket):
     
     try:
         # Use Deepgram's endpointing + utterance detection for natural turn-taking
-        dg_url = "wss://api.deepgram.com/v1/listen?encoding=linear16&sample_rate=16000&channels=1&endpointing=300&utterance_end_ms=1000&interim_results=true&punctuate=true"
+        dg_url = "wss://api.deepgram.com/v1/listen?endpointing=300&utterance_end_ms=1000&interim_results=true&punctuate=true"
         async with websockets.connect(
             dg_url,
             additional_headers={"Authorization": f"Token {deepgram_key}"}

@@ -144,6 +144,9 @@ export default function AgentDemoPage() {
           setStatus(data.status)
         } else if (data.type === 'audio') {
           playPCMAudio(data.data)
+        } else if (data.type === 'interrupt') {
+          // User interrupted - stop all queued audio immediately
+          stopAudioPlayback()
         } else if (data.type === 'error') {
           toast.error(data.message)
         }
@@ -178,6 +181,23 @@ export default function AgentDemoPage() {
     }
     
     mediaRecorder.start(100)
+  }
+
+  const stopAudioPlayback = () => {
+    // Reset the audio scheduling to stop queued audio
+    if (audioContextRef.current) {
+      const ctx = audioContextRef.current
+      // Reset play time to now - this effectively skips all queued audio
+      nextPlayTimeRef.current = ctx.currentTime
+      
+      // Close and recreate audio context for clean slate
+      try {
+        audioContextRef.current.close()
+      } catch(e) {}
+      
+      audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 })
+      nextPlayTimeRef.current = 0
+    }
   }
 
   const playPCMAudio = (base64Data) => {

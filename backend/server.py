@@ -279,13 +279,20 @@ async def realtime_conversation(websocket: WebSocket):
                                     word_count = len(interrupt_speech.split())
                                     logger.info(f"Interrupt ({word_count} words): {interrupt_speech.strip()}")
                                     
-                                    # 4+ words = real question, stop AI and answer it
+                                    # 4+ words = real question, stop AI and answer it NOW
                                     if word_count >= 4:
                                         logger.info(f"STOPPING AI to answer: {interrupt_speech.strip()}")
                                         stop_tts = True
                                         audio_playing_until = 0  # Clear the audio timer
-                                        current_utterance = interrupt_speech
+                                        # Tell frontend to stop playing audio immediately
+                                        await websocket.send_json({"type": "interrupt"})
+                                        # Process the interrupt right away
+                                        transcript_buffer = interrupt_speech
                                         interrupt_speech = ""
+                                        current_utterance = ""
+                                        if pending_process and not pending_process.done():
+                                            pending_process.cancel()
+                                        pending_process = asyncio.create_task(process())
                             else:
                                 # AI not busy - normal flow
                                 if interrupt_speech.strip():

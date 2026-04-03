@@ -277,16 +277,15 @@ async def realtime_conversation(websocket: WebSocket):
                             word_count = len(current_utterance.split())
                             logger.info(f"{ts()} Got ({word_count}w, sf={speech_final}): {current_utterance.strip()[:50]}...")
                             
-                            # Process if: speech_final OR enough words accumulated
-                            should_process = speech_final or word_count >= 8
-                            
-                            if should_process and word_count >= 4:
+                            # Only process when speech_final is True (user paused)
+                            # This prevents cutting off mid-sentence
+                            if speech_final and word_count >= 4:
                                 # Prevent rapid re-processing
                                 if time.time() - last_process_time < 0.5:
                                     continue
                                 
                                 interrupt_time = time.time()
-                                logger.info(f"{ts()} >>> INTERRUPT DETECTED - sending stop signal")
+                                logger.info(f"{ts()} >>> PROCESSING (speech_final=True)")
                                 last_process_time = time.time()
                                 
                                 # ALWAYS stop any current/pending response
@@ -298,7 +297,7 @@ async def realtime_conversation(websocket: WebSocket):
                                 if pending_process and not pending_process.done():
                                     pending_process.cancel()
                                 
-                                logger.info(f"{ts()} >>> Starting new response (interrupt took {(time.time()-interrupt_time)*1000:.0f}ms)")
+                                logger.info(f"{ts()} >>> Starting new response")
                                 
                                 # Set transcript and process
                                 transcript_buffer = current_utterance.strip()

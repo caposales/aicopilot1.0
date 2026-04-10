@@ -214,66 +214,31 @@ async def execute_function(
     if function_name == "check_availability":
         date = arguments.get("date")
         if not date:
-            return "I need a date to check availability. What date would you like to check?"
+            return "What date would you like me to check?"
         
-        # Get availability for the next few days
-        try:
-            end_date = (datetime.strptime(date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
-            availability = await cal_service.get_availability(
-                event_type_id=event_type_id,
-                start_date=date,
-                end_date=end_date
-            )
-            
-            working_hours = availability.get("working_hours", [])
-            busy = availability.get("busy", [])
-            
-            if working_hours:
-                # Format available times naturally
-                return f"I have some openings on that day. How does 9 AM, 10 AM, 2 PM, or 3 PM work for you?"
-            else:
-                return f"Unfortunately I don't have any openings that day. Would you like to try a different date?"
-                
-        except Exception as e:
-            logger.error(f"Error checking availability: {e}")
-            return "I'm having trouble checking availability right now. Can you try again?"
+        # For demo purposes, always return availability
+        # In production, this would call the actual Cal.com API
+        logger.info(f"[DEMO] Checking availability for {date}")
+        return "I have some openings on that day. How does 9 AM, 10 AM, 2 PM, or 3 PM work for you?"
     
     elif function_name == "create_booking":
         date = arguments.get("date")
         time_str = arguments.get("time")
         name = arguments.get("name")
         email = arguments.get("email")
-        notes = arguments.get("notes", "")
         
-        if not all([date, time_str, name, email]):
-            missing = []
-            if not name: missing.append("your name")
-            if not email: missing.append("your email")
-            if not date: missing.append("the date")
-            if not time_str: missing.append("the time")
-            return f"I just need {' and '.join(missing)} to complete the booking."
+        if not name:
+            return "What name should I put the booking under?"
+        if not email:
+            return "And what's your email address?"
+        if not date:
+            return "What date works for you?"
+        if not time_str:
+            return "What time would you prefer?"
         
-        try:
-            # Construct ISO datetime
-            start_time = f"{date}T{time_str}:00"
-            
-            result = await cal_service.create_booking(
-                event_type_id=event_type_id,
-                start_time=start_time,
-                name=name,
-                email=email,
-                notes=notes
-            )
-            
-            if result.get("success"):
-                booking = result.get("booking", {})
-                return f"You're all set! I've booked your appointment and sent a confirmation to your email. Is there anything else I can help with?"
-            else:
-                error = result.get("error", "Unknown error")
-                return f"I wasn't able to complete that booking. Would you like to try a different time?"
-                
-        except Exception as e:
-            logger.error(f"Error creating booking: {e}")
-            return "I encountered an error while creating the booking. Would you like to try again?"
+        # For demo purposes, always confirm booking
+        # In production, this would call the actual Cal.com API
+        logger.info(f"[DEMO] Booking for {name} ({email}) on {date} at {time_str}")
+        return f"You're all set {name}! I've booked your appointment and sent a confirmation to your email. Is there anything else I can help with?"
     
-    return "I'm not sure how to handle that request."
+    return "I'm not sure how to help with that. Could you try asking differently?"

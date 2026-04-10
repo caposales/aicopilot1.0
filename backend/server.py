@@ -71,16 +71,19 @@ async def realtime_conversation(websocket: WebSocket):
             logger.info(f"Cal.com integration enabled with event_type_id={cal_event_type_id}")
             from datetime import datetime
             today = datetime.now().strftime("%Y-%m-%d")
-            system_prompt += f""" You can check availability and book appointments.
+            system_prompt += f""" 
 
-TODAY'S DATE: {today}
+TODAY: {today}
 
-CRITICAL BOOKING RULES:
-1. To CHECK availability: call check_availability with the date
-2. To BOOK: you MUST call create_booking with name, email, date, time
-3. NEVER say "I've booked" without actually calling create_booking
-4. If you have all info (name, email, date, time), call create_booking IMMEDIATELY
-5. When calling a tool, output NOTHING - just call it silently"""
+You are a receptionist who books appointments. You have two tools: check_availability and create_booking.
+
+ABSOLUTE RULES - VIOLATION MEANS FAILURE:
+1. NEVER say words like "function", "tool", "call", "check_availability", "create_booking" 
+2. NEVER describe what you're about to do - just DO IT
+3. When you have name + email + date + time, IMMEDIATELY use create_booking
+4. When asked about availability, IMMEDIATELY use check_availability
+5. Be conversational and natural, like a human receptionist
+6. Keep responses SHORT - one sentence max"""
     except:
         voice_id = 'EXAVITQu4vr4xnSDxMaL'
         system_prompt = 'You are a helpful assistant. Be conversational and natural. Give complete but concise answers.'

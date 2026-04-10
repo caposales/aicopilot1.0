@@ -149,7 +149,7 @@ RULES:
         if start_time:
             logger.info(f">>> respond() called {(time.time()-start_time)*1000:.0f}ms after process start")
         
-        messages = [{"role": "system", "content": system_prompt}] + conversation[-6:]
+        messages = [{"role": "system", "content": system_prompt}] + conversation[-10:]
         full_response = ""
         audio_chunks_sent = 0
         first_audio_time = None
@@ -237,6 +237,9 @@ RULES:
                                 func_result = await execute_function(tool_name, args, cal_service, cal_event_type_id)
                                 full_response = phrase + " " + func_result
                                 await tts.send(json.dumps({"text": func_result, "try_trigger_generation": True}))
+                                
+                                # Add tool interaction to conversation so LLM knows what happened
+                                conversation.append({"role": "assistant", "content": f"{phrase} {func_result}"})
                             except Exception as e:
                                 logger.error(f"Tool error: {e}")
                                 await tts.send(json.dumps({"text": "I had trouble with that.", "try_trigger_generation": True}))

@@ -229,10 +229,10 @@ async def execute_function(
             busy = availability.get("busy", [])
             
             if working_hours:
-                # Format available times
-                return f"On {date}, I have availability during business hours. Some popular times are 9:00 AM, 10:00 AM, 2:00 PM, and 3:00 PM. What time works best for you?"
+                # Format available times naturally
+                return f"I have some openings on that day. How does 9 AM, 10 AM, 2 PM, or 3 PM work for you?"
             else:
-                return f"I don't have any availability on {date}. Would you like to check another date?"
+                return f"Unfortunately I don't have any openings that day. Would you like to try a different date?"
                 
         except Exception as e:
             logger.error(f"Error checking availability: {e}")
@@ -247,11 +247,11 @@ async def execute_function(
         
         if not all([date, time_str, name, email]):
             missing = []
-            if not date: missing.append("date")
-            if not time_str: missing.append("time")
-            if not name: missing.append("name")
-            if not email: missing.append("email")
-            return f"I need the following to complete the booking: {', '.join(missing)}. Can you provide those?"
+            if not name: missing.append("your name")
+            if not email: missing.append("your email")
+            if not date: missing.append("the date")
+            if not time_str: missing.append("the time")
+            return f"I just need {' and '.join(missing)} to complete the booking."
         
         try:
             # Construct ISO datetime
@@ -267,10 +267,10 @@ async def execute_function(
             
             if result.get("success"):
                 booking = result.get("booking", {})
-                return f"I've successfully booked your appointment for {date} at {time_str}. A confirmation email has been sent to {email}. Is there anything else I can help you with?"
+                return f"You're all set! I've booked your appointment and sent a confirmation to your email. Is there anything else I can help with?"
             else:
                 error = result.get("error", "Unknown error")
-                return f"I wasn't able to complete the booking. {error}. Would you like to try a different time?"
+                return f"I wasn't able to complete that booking. Would you like to try a different time?"
                 
         except Exception as e:
             logger.error(f"Error creating booking: {e}")

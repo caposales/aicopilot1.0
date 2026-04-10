@@ -247,18 +247,46 @@ RULES:
                             # Regular response - filter out any function-like text
                             content = message.get("content", "")
                             if content and not stop_tts:
-                                # Remove any function call artifacts the LLM might output
+                                # Check if LLM is trying to output a function call as text
                                 import re
-                                # Remove <function=...>, </function>, {json}, etc
-                                content = re.sub(r'</?function[^>]*>', '', content)
-                                content = re.sub(r'<[^>]*=\w+>', '', content)
-                                content = re.sub(r'\{"[^}]+"\}', '', content)
-                                content = re.sub(r'check_availability|create_booking', '', content, flags=re.IGNORECASE)
-                                content = content.strip()
-                                
-                                if content:
-                                    full_response = content
-                                    await tts.send(json.dumps({"text": content, "try_trigger_generation": True}))
+                                if '<function=' in content or 'function=' in content or '{"date"' in content:
+                                    # LLM tried to fake a function call - extract and execute it
+                                    logger.warning(f"LLM tried to output function as text: {content[:100]}")
+                                    
+                                    # Try to extract function name and args
+                                    func_match = re.search(r'(?:function=|<function=)(\w+)[>\s]*(\{[^}]+\})?', content)
+                                    if func_match:
+                                        tool_name = func_match.group(1)
+                                        tool_args = func_match.group(2) or '{}'
+                                        logger.info(f"Extracted function call: {tool_name} with {tool_args}")
+                                        
+                                        # Execute the function
+                                        phrases = {
+                                            "check_availability": "Let me check that for you.",
+                                            "create_booking": "Let me book that for you."
+                                        }
+                                        phrase = phrases.get(tool_name, "One moment.")
+                                        await tts.send(json.dumps({"text": phrase + " ", "try_trigger_generation": True}))
+                                        
+                                        try:
+                                            args = json.loads(tool_args) if tool_args else {}
+                                            func_result = await execute_function(tool_name, args, cal_service, cal_event_type_id)
+                                            full_response = phrase + " " + func_result
+                                            await tts.send(json.dumps({"text": func_result, "try_trigger_generation": True}))
+                                            conversation.append({"role": "assistant", "content": f"{phrase} {func_result}"})
+                                        except Exception as e:
+                                            logger.error(f"Extracted function error: {e}")
+                                else:
+                                    # No function detected - just clean and speak
+                                    content = re.sub(r'</?function[^>]*>', '', content)
+                                    content = re.sub(r'<[^>]*=\w+>', '', content)
+                                    content = re.sub(r'\{"[^}]+"\}', '', content)
+                                    content = re.sub(r'check_availability|create_booking', '', content, flags=re.IGNORECASE)
+                                    content = content.strip()
+                                    
+                                    if content:
+                                        full_response = content
+                                        await tts.send(json.dumps({"text": content, "try_trigger_generation": True}))
                     else:
                         # Streaming when no tools - fastest response
                         llm_payload = {

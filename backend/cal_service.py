@@ -97,12 +97,10 @@ class CalComService:
                 "metadata": {},
                 "responses": {
                     "name": name,
-                    "email": email
+                    "email": email,
+                    "notes": notes if notes else "Booked via voice assistant"
                 }
             }
-            
-            if notes:
-                payload["responses"]["notes"] = notes
             
             logger.info(f"Creating booking with payload: {payload}")
             
@@ -288,6 +286,11 @@ async def execute_function(
             return "What date works for you?"
         if not time_str:
             return "What time would you prefer?"
+        
+        # Validate email format
+        if "@" not in str(email) or "." not in str(email):
+            logger.warning(f"Invalid email format: {email}")
+            return "I didn't catch that email correctly. Could you spell it out for me?"
         
         try:
             # Parse time to proper format

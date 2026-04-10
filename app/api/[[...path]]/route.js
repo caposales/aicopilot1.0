@@ -792,6 +792,48 @@ if (route === '/voices' && method === 'GET') {
       })
     }
 
+    // Get Cal.com event types (to help user find their event type ID)
+    if (route === '/integrations/calcom/event-types' && method === 'GET') {
+      if (!user) return errorResponse('Unauthorized', 401)
+      
+      const integrations = await db.collection('integrations').findOne({ workspaceId: user.workspaceId })
+      
+      if (!integrations?.calcom?.apiKey) {
+        return errorResponse('Cal.com not configured', 400)
+      }
+      
+      const apiKey = decrypt(integrations.calcom.apiKey)
+      
+      try {
+        const response = await fetch('https://api.cal.com/v2/event-types', {
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'cal-api-version': '2024-09-04',
+            'Content-Type': 'application/json'
+          }
+        })
+        
+        const data = await response.json()
+        
+        if (!response.ok) {
+          return errorResponse(`Cal.com API error: ${JSON.stringify(data)}`, response.status)
+        }
+        
+        // Return simplified event types list
+        const eventTypes = (data.data || []).map(et => ({
+          id: et.id,
+          title: et.title,
+          slug: et.slug,
+          length: et.length,
+          description: et.description
+        }))
+        
+        return jsonResponse({ eventTypes })
+      } catch (e) {
+        return errorResponse(`Failed to fetch event types: ${e.message}`, 500)
+      }
+    }
+
     // ====== CALL LOGS ======
     
     // List call logs

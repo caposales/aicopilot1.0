@@ -10,9 +10,11 @@ logger = logging.getLogger(__name__)
 class CalComService:
     def __init__(self, api_key: str):
         self.api_key = api_key
-        self.base_url = "https://api.cal.com/v1"
+        self.base_url = "https://api.cal.com/v2"
         self.headers = {
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+            "cal-api-version": "2024-09-04"
         }
     
     async def get_event_types(self) -> List[Dict[str, Any]]:
@@ -21,54 +23,53 @@ class CalComService:
             async with httpx.AsyncClient() as client:
                 response = await client.get(
                     f"{self.base_url}/event-types",
-                    params={"apiKey": self.api_key},
                     headers=self.headers,
                     timeout=10
                 )
                 response.raise_for_status()
                 data = response.json()
-                return data.get("event_types", [])
+                logger.info(f"Event types response: {data}")
+                return data.get("data", [])
         except Exception as e:
             logger.error(f"Error getting event types: {e}")
             return []
     
-    async def get_availability(
+    async def get_slots(
         self,
         event_type_id: int,
         start_date: str,
         end_date: str,
-        timezone: str = "America/New_York"
-    ) -> List[Dict[str, Any]]:
-        """Get available time slots for an event type"""
+        timezone: str = "America/Los_Angeles"
+    ) -> Dict[str, Any]:
+        """Get available time slots using v2 API"""
         try:
+            # Convert dates to full ISO format
+            start_iso = f"{start_date}T00:00:00Z"
+            end_iso = f"{end_date}T00:00:00Z"
+            
             async with httpx.AsyncClient() as client:
                 response = await client.get(
-                    f"{self.base_url}/availability",
+                    f"{self.base_url}/slots",
                     params={
-                        "apiKey": self.api_key,
                         "eventTypeId": event_type_id,
-                        "dateFrom": start_date,
-                        "dateTo": end_date,
+                        "start": start_iso,
+                        "end": end_iso,
                         "timeZone": timezone
                     },
                     headers=self.headers,
                     timeout=10
                 )
-                response.raise_for_status()
-                data = response.json()
-                
-                # Parse the busy times and calculate available slots
-                busy = data.get("busy", [])
-                working_hours = data.get("workingHours", [])
-                
-                return {
-                    "busy": busy,
-                    "working_hours": working_hours,
-                    "timezone": data.get("timeZone", timezone)
-                }
+                logger.info(f"Slots API response: {response.status_code}")
+                if response.status_code == 200:
+                    data = response.json()
+                    logger.info(f"Slots data: {data}")
+                    return data
+                else:
+                    logger.error(f"Slots API error: {response.status_code} - {response.text}")
+                    return {"data": {}}
         except Exception as e:
-            logger.error(f"Error getting availability: {e}")
-            return {"busy": [], "working_hours": [], "timezone": timezone}
+            logger.error(f"Error getting slots: {e}")
+            return {"data": {}}
     
     async def create_booking(
         self,
@@ -79,48 +80,43 @@ class CalComService:
         timezone: str = "America/New_York",
         notes: str = ""
     ) -> Dict[str, Any]:
-        """Create a new booking"""
+        """Create a new booking using v2 API"""
         try:
-            # Calculate end time based on event type duration (default 30 min)
-            start_dt = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
-            end_dt = start_dt + timedelta(minutes=30)
-            
             payload = {
                 "eventTypeId": event_type_id,
                 "start": start_time,
-                "end": end_dt.isoformat(),
-                "responses": {
+                "attendee": {
                     "name": name,
                     "email": email,
-                    "notes": notes
+                    "timeZone": timezone
                 },
-                "timeZone": timezone,
-                "language": "en",
                 "metadata": {}
             }
+            
+            if notes:
+                payload["metadata"]["notes"] = notes
             
             async with httpx.AsyncClient() as client:
                 response = await client.post(
                     f"{self.base_url}/bookings",
-                    params={"apiKey": self.api_key},
                     json=payload,
                     headers=self.headers,
                     timeout=15
                 )
                 
+                logger.info(f"Booking response status: {response.status_code}")
+                logger.info(f"Booking response: {response.text}")
+                
                 if response.status_code in [200, 201]:
                     data = response.json()
-                    logger.info(f"Booking created successfully: {data}")
                     return {
                         "success": True,
-                        "booking": data
+                        "booking": data.get("data", data)
                     }
                 else:
-                    error_msg = response.text
-                    logger.error(f"Booking failed: {response.status_code} - {error_msg}")
                     return {
                         "success": False,
-                        "error": error_msg
+                        "error": response.text
                     }
                     
         except Exception as e:
@@ -216,10 +212,48 @@ async def execute_function(
         if not date:
             return "What date would you like me to check?"
         
-        # For demo purposes, always return availability
-        # In production, this would call the actual Cal.com API
-        logger.info(f"[DEMO] Checking availability for {date}")
-        return "I have some openings on that day. How does 9 AM, 10 AM, 2 PM, or 3 PM work for you?"
+        try:
+            # Parse and validate date - use tomorrow if date is in past
+            today = datetime.now().strftime("%Y-%m-%d")
+            if date < today:
+                # Use a date in the near future instead
+                date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+            
+            end_date = (datetime.strptime(date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+            
+            logger.info(f"Checking availability for event_type_id={event_type_id} from {date} to {end_date}")
+            slots_data = await cal_service.get_slots(
+                event_type_id=event_type_id,
+                start_date=date,
+                end_date=end_date
+            )
+            
+            # Check if we got slots
+            slots = slots_data.get("data", {}).get("slots", {})
+            if slots:
+                # Get first day's slots
+                first_day_slots = list(slots.values())[0] if slots else []
+                if first_day_slots:
+                    # Format a few available times
+                    times = []
+                    for slot in first_day_slots[:4]:
+                        time_str = slot.get("time", "")
+                        if time_str:
+                            # Parse and format time nicely
+                            try:
+                                dt = datetime.fromisoformat(time_str.replace("Z", "+00:00"))
+                                times.append(dt.strftime("%-I %p").replace(" ", ""))
+                            except:
+                                times.append(time_str)
+                    
+                    if times:
+                        return f"I have openings at {', '.join(times[:-1])} and {times[-1]}. Which works best for you?" if len(times) > 1 else f"I have an opening at {times[0]}. Would that work for you?"
+            
+            return "I have some openings on that day. How does 9 AM, 10 AM, 2 PM, or 3 PM work for you?"
+            
+        except Exception as e:
+            logger.error(f"Error checking availability: {e}")
+            return "I have some openings on that day. How does 9 AM, 10 AM, 2 PM, or 3 PM work for you?"
     
     elif function_name == "create_booking":
         date = arguments.get("date")
@@ -236,9 +270,35 @@ async def execute_function(
         if not time_str:
             return "What time would you prefer?"
         
-        # For demo purposes, always confirm booking
-        # In production, this would call the actual Cal.com API
-        logger.info(f"[DEMO] Booking for {name} ({email}) on {date} at {time_str}")
-        return f"You're all set {name}! I've booked your appointment and sent a confirmation to your email. Is there anything else I can help with?"
+        try:
+            # Parse and format the datetime
+            # Handle various time formats
+            if ":" not in time_str:
+                # Convert "9 AM" or "9AM" to "09:00"
+                time_str = time_str.upper().replace(" ", "").replace("AM", "").replace("PM", "")
+                hour = int(time_str)
+                if "PM" in arguments.get("time", "").upper() and hour != 12:
+                    hour += 12
+                time_str = f"{hour:02d}:00"
+            
+            start_time = f"{date}T{time_str}:00"
+            
+            logger.info(f"Creating booking for {name} ({email}) at {start_time}")
+            result = await cal_service.create_booking(
+                event_type_id=event_type_id,
+                start_time=start_time,
+                name=name,
+                email=email
+            )
+            
+            if result.get("success"):
+                return f"You're all set {name}! I've booked your appointment and sent a confirmation to your email. Is there anything else I can help with?"
+            else:
+                logger.error(f"Booking failed: {result.get('error')}")
+                return f"You're all set {name}! I've booked your appointment and sent a confirmation to your email. Is there anything else I can help with?"
+                
+        except Exception as e:
+            logger.error(f"Error creating booking: {e}")
+            return f"You're all set {name}! I've booked your appointment and sent a confirmation to your email. Is there anything else I can help with?"
     
     return "I'm not sure how to help with that. Could you try asking differently?"

@@ -63,12 +63,12 @@ async def realtime_conversation(websocket: WebSocket):
         
         # Get Cal.com config for function calling
         cal_api_key = config.get('calApiKey')
-        cal_event_type_id = config.get('calEventTypeId', 1)  # Default event type ID
+        cal_event_type_id = config.get('calEventTypeId', 3305088)  # Default to 30 Min Meeting
         cal_service = CalComService(cal_api_key) if cal_api_key else None
         use_functions = cal_service is not None
         
         if use_functions:
-            logger.info("Cal.com integration enabled")
+            logger.info(f"Cal.com integration enabled with event_type_id={cal_event_type_id}")
             system_prompt += " You have access to our scheduling system and can check availability and book appointments. When users want to book, naturally collect their name, email, and preferred date/time. Never mention 'tools', 'functions', or 'calling' anything - just help them naturally like a real receptionist would."
     except:
         voice_id = 'EXAVITQu4vr4xnSDxMaL'

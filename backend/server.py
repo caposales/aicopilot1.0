@@ -193,6 +193,8 @@ async def realtime_conversation(websocket: WebSocket):
                         tool_call_data = {"name": "", "arguments": "", "id": ""}
                         is_tool_call = False
                         
+                        collected_content = ""  # Buffer all content first
+                        
                         async for line in resp.aiter_lines():
                             if should_stop or stop_tts: break
                             if line.startswith("data: ") and "[DONE]" not in line:
@@ -211,20 +213,26 @@ async def realtime_conversation(websocket: WebSocket):
                                         if tc.get("function", {}).get("arguments"):
                                             tool_call_data["arguments"] += tc["function"]["arguments"]
                                     
-                                    # Regular content (only if NOT a tool call)
-                                    if not is_tool_call:
-                                        c = delta.get("content", "")
-                                        if c:
-                                            full_response += c
-                                            buf += c
-                                            if ' ' in buf or any(p in buf for p in '.!?,'):
-                                                await tts.send(json.dumps({"text": buf, "try_trigger_generation": True}))
-                                                buf = ""
+                                    # Collect content (we'll decide what to do with it after)
+                                    c = delta.get("content", "")
+                                    if c:
+                                        collected_content += c
                                 except: pass
                         
-                        # Send remaining buffer if not a tool call
-                        if buf and not stop_tts and not is_tool_call:
-                            await tts.send(json.dumps({"text": buf, "try_trigger_generation": True}))
+                        # Now decide what to do based on whether it's a tool call
+                        if not is_tool_call and collected_content and not stop_tts:
+                            # No tool call - stream the content to TTS
+                            full_response = collected_content
+                            # Send in chunks for natural speech
+                            words = collected_content.split()
+                            buf = ""
+                            for word in words:
+                                buf += word + " "
+                                if len(buf) > 30 or any(p in buf for p in '.!?,'):
+                                    await tts.send(json.dumps({"text": buf, "try_trigger_generation": True}))
+                                    buf = ""
+                            if buf:
+                                await tts.send(json.dumps({"text": buf, "try_trigger_generation": True}))
                         
                         # Handle tool call if detected - execute function and get verbal response
                         if is_tool_call and tool_call_data["name"] and cal_service and not stop_tts:

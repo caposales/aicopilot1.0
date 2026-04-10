@@ -69,7 +69,10 @@ async def realtime_conversation(websocket: WebSocket):
         
         if use_functions:
             logger.info(f"Cal.com integration enabled with event_type_id={cal_event_type_id}")
-            system_prompt += " You have access to our scheduling system and can check availability and book appointments. When users want to book, naturally collect their name, email, and preferred date/time. Never mention 'tools', 'functions', or 'calling' anything - just help them naturally like a real receptionist would."
+            system_prompt += """ You have access to our scheduling system. When users want to book:
+1. Collect their name, email, and preferred date/time naturally
+2. When you need to check availability or create a booking, just DO IT silently - never say "I'll check" or "Let me call" or mention any function/tool names
+3. Act like a real receptionist - you just know the schedule, you don't need to announce that you're looking it up"""
     except:
         voice_id = 'EXAVITQu4vr4xnSDxMaL'
         system_prompt = 'You are a helpful assistant. Be conversational and natural. Give complete but concise answers.'

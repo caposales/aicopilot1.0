@@ -350,11 +350,11 @@ async def realtime_conversation(websocket: WebSocket):
                             word_count = len(current_utterance.split())
                             logger.info(f"{ts()} Got ({word_count}w, sf={speech_final}): {current_utterance.strip()[:50]}...")
                             
-                            # Only process when speech_final is True (user paused)
-                            # This prevents cutting off mid-sentence
-                            if speech_final and word_count >= 4:
+                            # Process when speech_final is True (user paused)
+                            # Minimum 2 words to avoid processing noise/partial words
+                            if speech_final and word_count >= 2:
                                 # Prevent rapid re-processing
-                                if time.time() - last_process_time < 0.5:
+                                if time.time() - last_process_time < 0.3:
                                     continue
                                 
                                 interrupt_time = time.time()

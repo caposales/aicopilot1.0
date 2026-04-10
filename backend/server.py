@@ -170,90 +170,85 @@ async def realtime_conversation(websocket: WebSocket):
                 audio_task = asyncio.create_task(forward())
                 
                 async with httpx.AsyncClient() as client:
-                    # Different approach based on whether tools are enabled
+                    # Always use streaming for lowest latency
+                    llm_payload = {
+                        "model": "llama-3.1-8b-instant",
+                        "messages": messages,
+                        "max_tokens": 300,
+                        "stream": True
+                    }
+                    
+                    # Add tools if Cal.com is enabled
                     if use_functions:
-                        # NON-STREAMING when tools enabled - Groq is fast (~200ms)
-                        # This lets us cleanly detect tool calls without speaking garbage
-                        llm_payload = {
-                            "model": "llama-3.1-8b-instant",
-                            "messages": messages,
-                            "max_tokens": 300,
-                            "stream": False,
-                            "tools": BOOKING_FUNCTIONS,
-                            "tool_choice": "auto"
-                        }
+                        llm_payload["tools"] = BOOKING_FUNCTIONS
+                        llm_payload["tool_choice"] = "auto"
+                    
+                    async with client.stream(
+                        "POST",
+                        "https://api.groq.com/openai/v1/chat/completions",
+                        headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
+                        json=llm_payload,
+                        timeout=30.0
+                    ) as resp:
+                        buf = ""
+                        tool_call_data = {"name": "", "arguments": "", "id": ""}
+                        is_tool_call = False
                         
-                        resp = await client.post(
-                            "https://api.groq.com/openai/v1/chat/completions",
-                            headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
-                            json=llm_payload,
-                            timeout=30.0
-                        )
-                        result = resp.json()
-                        choice = result.get("choices", [{}])[0]
-                        message = choice.get("message", {})
+                        async for line in resp.aiter_lines():
+                            if should_stop or stop_tts: break
+                            if line.startswith("data: ") and "[DONE]" not in line:
+                                try:
+                                    chunk = json.loads(line[6:])
+                                    delta = chunk.get("choices", [{}])[0].get("delta", {})
+                                    
+                                    # Check for tool calls
+                                    if delta.get("tool_calls"):
+                                        is_tool_call = True
+                                        tc = delta["tool_calls"][0]
+                                        if tc.get("id"):
+                                            tool_call_data["id"] = tc["id"]
+                                        if tc.get("function", {}).get("name"):
+                                            tool_call_data["name"] = tc["function"]["name"]
+                                        if tc.get("function", {}).get("arguments"):
+                                            tool_call_data["arguments"] += tc["function"]["arguments"]
+                                    
+                                    # Stream content immediately (for non-tool responses)
+                                    if not is_tool_call:
+                                        c = delta.get("content", "")
+                                        if c:
+                                            full_response += c
+                                            buf += c
+                                            # Send chunks for natural speech
+                                            if ' ' in buf or any(p in buf for p in '.!?,'):
+                                                await tts.send(json.dumps({"text": buf, "try_trigger_generation": True}))
+                                                buf = ""
+                                except: pass
                         
-                        if message.get("tool_calls") and not stop_tts:
-                            # Tool call - execute it
-                            tc = message["tool_calls"][0]
-                            tool_name = tc["function"]["name"]
-                            tool_args = tc["function"]["arguments"]
-                            
-                            logger.info(f"Tool call: {tool_name}")
+                        # Send remaining buffer
+                        if buf and not stop_tts and not is_tool_call:
+                            await tts.send(json.dumps({"text": buf, "try_trigger_generation": True}))
+                        
+                        # Handle tool call if detected
+                        if is_tool_call and tool_call_data["name"] and cal_service and not stop_tts:
+                            logger.info(f"Tool call: {tool_call_data['name']}")
                             
                             # Say natural phrase
                             phrases = {
                                 "check_availability": "Let me check our availability for you.",
                                 "create_booking": "Perfect, let me book that for you right now."
                             }
-                            phrase = phrases.get(tool_name, "One moment.")
+                            phrase = phrases.get(tool_call_data["name"], "One moment.")
                             await tts.send(json.dumps({"text": phrase + " ", "try_trigger_generation": True}))
                             
                             # Execute function
-                            args = json.loads(tool_args) if tool_args else {}
-                            func_result = await execute_function(tool_name, args, cal_service, cal_event_type_id)
-                            
-                            # Speak the result directly - it's already written naturally
-                            full_response = phrase + " " + func_result
-                            await tts.send(json.dumps({"text": func_result, "try_trigger_generation": True}))
-                        else:
-                            # Regular response - send to TTS
-                            content = message.get("content", "")
-                            if content and not stop_tts:
-                                full_response = content
-                                await tts.send(json.dumps({"text": content, "try_trigger_generation": True}))
-                    
-                    else:
-                        # NO tools - use STREAMING for lowest latency
-                        llm_payload = {
-                            "model": "llama-3.1-8b-instant",
-                            "messages": messages,
-                            "max_tokens": 300,
-                            "stream": True
-                        }
-                        
-                        async with client.stream(
-                            "POST",
-                            "https://api.groq.com/openai/v1/chat/completions",
-                            headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
-                            json=llm_payload,
-                            timeout=30.0
-                        ) as resp:
-                            buf = ""
-                            async for line in resp.aiter_lines():
-                                if should_stop or stop_tts: break
-                                if line.startswith("data: ") and "[DONE]" not in line:
-                                    try:
-                                        c = json.loads(line[6:]).get("choices", [{}])[0].get("delta", {}).get("content", "")
-                                        if c:
-                                            full_response += c
-                                            buf += c
-                                            if ' ' in buf or any(p in buf for p in '.!?,'):
-                                                await tts.send(json.dumps({"text": buf, "try_trigger_generation": True}))
-                                                buf = ""
-                                    except: pass
-                            if buf and not stop_tts:
-                                await tts.send(json.dumps({"text": buf, "try_trigger_generation": True}))
+                            try:
+                                args = json.loads(tool_call_data["arguments"]) if tool_call_data["arguments"] else {}
+                                func_result = await execute_function(tool_call_data["name"], args, cal_service, cal_event_type_id)
+                                full_response = phrase + " " + func_result
+                                await tts.send(json.dumps({"text": func_result, "try_trigger_generation": True}))
+                            except Exception as e:
+                                logger.error(f"Tool execution error: {e}")
+                                await tts.send(json.dumps({"text": "I had trouble with that. Could you try again?", "try_trigger_generation": True}))
                 
                 await tts.send(json.dumps({"text": ""}))
                 

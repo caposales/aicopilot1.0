@@ -241,11 +241,21 @@ RULES:
                                 logger.error(f"Tool error: {e}")
                                 await tts.send(json.dumps({"text": "I had trouble with that.", "try_trigger_generation": True}))
                         else:
-                            # Regular response
+                            # Regular response - filter out any function-like text
                             content = message.get("content", "")
                             if content and not stop_tts:
-                                full_response = content
-                                await tts.send(json.dumps({"text": content, "try_trigger_generation": True}))
+                                # Remove any function call artifacts the LLM might output
+                                import re
+                                # Remove <function=...>, </function>, {json}, etc
+                                content = re.sub(r'</?function[^>]*>', '', content)
+                                content = re.sub(r'<[^>]*=\w+>', '', content)
+                                content = re.sub(r'\{"[^}]+"\}', '', content)
+                                content = re.sub(r'check_availability|create_booking', '', content, flags=re.IGNORECASE)
+                                content = content.strip()
+                                
+                                if content:
+                                    full_response = content
+                                    await tts.send(json.dumps({"text": content, "try_trigger_generation": True}))
                     else:
                         # Streaming when no tools - fastest response
                         llm_payload = {

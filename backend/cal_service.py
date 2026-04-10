@@ -86,18 +86,15 @@ class CalComService:
             # Calculate end time (30 min default)
             from datetime import datetime, timedelta
             
-            # Parse the start time (without Z, it's local time)
-            if start_time.endswith('Z'):
-                start_dt = datetime.fromisoformat(start_time.replace("Z", ""))
-            else:
-                start_dt = datetime.fromisoformat(start_time)
+            # Parse the start time (it's already in UTC with Z)
+            start_dt = datetime.fromisoformat(start_time.replace("Z", "").replace(".000", ""))
             end_dt = start_dt + timedelta(minutes=30)
             
-            # Send without Z - Cal.com will use timeZone to interpret as local
+            # Send WITH Z - times are in UTC
             payload = {
                 "eventTypeId": event_type_id,
-                "start": start_dt.strftime("%Y-%m-%dT%H:%M:%S"),
-                "end": end_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+                "start": start_dt.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+                "end": end_dt.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
                 "timeZone": timezone,
                 "language": "en",
                 "metadata": {},
@@ -327,17 +324,21 @@ async def execute_function(
             except:
                 hour = 9
             
-            # Convert to 24h
+            # Convert to 24h format
             if is_pm and hour != 12:
                 hour += 12
             elif is_am and hour == 12:
                 hour = 0
             
-            # Send time WITHOUT the Z suffix - Cal.com will use the timeZone parameter
-            # to interpret this as local time
-            start_time = f"{date}T{hour:02d}:00:00"
+            # Convert Pacific time to UTC (add 7 hours for PDT)
+            # Handle date rollover
+            from datetime import datetime as dt, timedelta
+            local_dt = dt.strptime(f"{date}T{hour:02d}:00:00", "%Y-%m-%dT%H:%M:%S")
+            utc_dt = local_dt + timedelta(hours=7)  # Pacific to UTC
             
-            logger.info(f"Creating booking: {name} ({email_cleaned}) at {date} {hour}:00 local (start_time={start_time})")
+            start_time = utc_dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            
+            logger.info(f"Creating booking: {name} ({email_cleaned}) - User said {hour}:00 Pacific, sending {start_time} UTC")
             
             result = await cal_service.create_booking(
                 event_type_id=event_type_id,

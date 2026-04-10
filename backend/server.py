@@ -280,8 +280,9 @@ async def realtime_conversation(websocket: WebSocket):
         state["is_speaking"] = False
     
     try:
-        # Use Deepgram's endpointing + utterance detection for natural turn-taking
-        dg_url = "wss://api.deepgram.com/v1/listen?endpointing=300&utterance_end_ms=1000&interim_results=true&punctuate=true"
+        # Use Deepgram's endpointing for natural turn-taking
+        # Reduced endpointing time for faster response
+        dg_url = "wss://api.deepgram.com/v1/listen?endpointing=200&utterance_end_ms=800&interim_results=true&punctuate=true&vad_events=true"
         async with websockets.connect(
             dg_url,
             additional_headers={"Authorization": f"Token {deepgram_key}"}
@@ -350,15 +351,25 @@ async def realtime_conversation(websocket: WebSocket):
                             word_count = len(current_utterance.split())
                             logger.info(f"{ts()} Got ({word_count}w, sf={speech_final}): {current_utterance.strip()[:50]}...")
                             
-                            # Process when speech_final is True (user paused)
-                            # Minimum 2 words to avoid processing noise/partial words
+                            # Process when:
+                            # 1. speech_final is True (user paused), OR
+                            # 2. We have enough words and haven't processed recently (fallback for slow speech_final)
+                            should_process = False
+                            
                             if speech_final and word_count >= 2:
+                                should_process = True
+                            elif word_count >= 4 and (time.time() - last_process_time) > 2.0:
+                                # Fallback: if we have 4+ words and it's been 2+ seconds since last process
+                                logger.info(f"{ts()} >>> FALLBACK PROCESSING (no speech_final after 2s)")
+                                should_process = True
+                            
+                            if should_process:
                                 # Prevent rapid re-processing
                                 if time.time() - last_process_time < 0.3:
                                     continue
                                 
                                 interrupt_time = time.time()
-                                logger.info(f"{ts()} >>> PROCESSING (speech_final=True)")
+                                logger.info(f"{ts()} >>> PROCESSING (speech_final={speech_final})")
                                 last_process_time = time.time()
                                 
                                 # ALWAYS stop any current/pending response

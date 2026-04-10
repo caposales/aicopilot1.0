@@ -149,7 +149,7 @@ export default function AgentDemoPage() {
       // Add Cal.com integration if available
       if (integrationKeys?.calcom) {
         config.calApiKey = integrationKeys.calcom
-        config.calEventTypeId = selectedAgent.calEventTypeId || 1
+        config.calEventTypeId = selectedAgent.calEventTypeId || 3305088  // Default to 30 Min Meeting
       }
       
       ws.send(JSON.stringify(config))

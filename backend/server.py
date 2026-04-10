@@ -69,14 +69,18 @@ async def realtime_conversation(websocket: WebSocket):
         
         if use_functions:
             logger.info(f"Cal.com integration enabled with event_type_id={cal_event_type_id}")
-            system_prompt += """ You can check availability and book appointments.
+            from datetime import datetime
+            today = datetime.now().strftime("%Y-%m-%d")
+            system_prompt += f""" You can check availability and book appointments.
 
-CRITICAL RULES:
-- When you decide to use a tool, output NOTHING. No text at all. Just call the tool silently.
-- NEVER say "I'll check", "Let me look", "calling function", or ANY text before using a tool.
-- NEVER mention dates like "2024" or function names.
-- After getting tool results, respond naturally with the information.
-- Collect name, email, date, and time naturally through conversation."""
+TODAY'S DATE: {today}
+
+RULES:
+- When using a tool, output NOTHING. Just call it silently.
+- NEVER announce you're checking or calling anything.
+- Use dates in {datetime.now().year} (current year), not 2024.
+- After the tool returns results, just share the information naturally.
+- To book: collect name, email, date, and time through conversation."""
     except:
         voice_id = 'EXAVITQu4vr4xnSDxMaL'
         system_prompt = 'You are a helpful assistant. Be conversational and natural. Give complete but concise answers.'

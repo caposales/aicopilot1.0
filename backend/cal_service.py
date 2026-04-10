@@ -179,7 +179,7 @@ BOOKING_FUNCTIONS = [
         "type": "function", 
         "function": {
             "name": "create_booking",
-            "description": "Create a booking/appointment. Call this when the user confirms they want to book a specific time slot.",
+            "description": "REQUIRED: You MUST call this function to actually create a booking. Never say you've booked without calling this. Call when you have: name, email, date, and time.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -189,7 +189,7 @@ BOOKING_FUNCTIONS = [
                     },
                     "time": {
                         "type": "string", 
-                        "description": "The time for the booking in HH:MM format (24-hour)"
+                        "description": "The time for the booking (e.g. '11:00' or '14:30')"
                     },
                     "name": {
                         "type": "string",
@@ -197,11 +197,7 @@ BOOKING_FUNCTIONS = [
                     },
                     "email": {
                         "type": "string",
-                        "description": "The email of the person booking"
-                    },
-                    "notes": {
-                        "type": "string",
-                        "description": "Any additional notes for the booking"
+                        "description": "The email address of the person booking"
                     }
                 },
                 "required": ["date", "time", "name", "email"]

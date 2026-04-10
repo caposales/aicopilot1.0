@@ -75,12 +75,12 @@ async def realtime_conversation(websocket: WebSocket):
 
 TODAY'S DATE: {today}
 
-RULES:
-- When using a tool, output NOTHING. Just call it silently.
-- NEVER announce you're checking or calling anything.
-- Use dates in {datetime.now().year} (current year), not 2024.
-- After the tool returns results, just share the information naturally.
-- To book: collect name, email, date, and time through conversation."""
+CRITICAL BOOKING RULES:
+1. To CHECK availability: call check_availability with the date
+2. To BOOK: you MUST call create_booking with name, email, date, time
+3. NEVER say "I've booked" without actually calling create_booking
+4. If you have all info (name, email, date, time), call create_booking IMMEDIATELY
+5. When calling a tool, output NOTHING - just call it silently"""
     except:
         voice_id = 'EXAVITQu4vr4xnSDxMaL'
         system_prompt = 'You are a helpful assistant. Be conversational and natural. Give complete but concise answers.'

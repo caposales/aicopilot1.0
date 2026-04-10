@@ -85,13 +85,19 @@ class CalComService:
         try:
             # Calculate end time (30 min default)
             from datetime import datetime, timedelta
-            start_dt = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
+            
+            # Parse the start time (without Z, it's local time)
+            if start_time.endswith('Z'):
+                start_dt = datetime.fromisoformat(start_time.replace("Z", ""))
+            else:
+                start_dt = datetime.fromisoformat(start_time)
             end_dt = start_dt + timedelta(minutes=30)
             
+            # Send without Z - Cal.com will use timeZone to interpret as local
             payload = {
                 "eventTypeId": event_type_id,
-                "start": start_dt.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
-                "end": end_dt.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+                "start": start_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+                "end": end_dt.strftime("%Y-%m-%dT%H:%M:%S"),
                 "timeZone": timezone,
                 "language": "en",
                 "metadata": {},
@@ -327,12 +333,11 @@ async def execute_function(
             elif is_am and hour == 12:
                 hour = 0
             
-            # Send local Pacific time - Cal.com uses the timeZone parameter to interpret
-            # We send as if it's UTC but Cal.com will apply the timezone
-            # For Pacific (UTC-7), 5 PM local = 5 PM in the booking
-            start_time = f"{date}T{hour:02d}:00:00.000Z"
+            # Send time WITHOUT the Z suffix - Cal.com will use the timeZone parameter
+            # to interpret this as local time
+            start_time = f"{date}T{hour:02d}:00:00"
             
-            logger.info(f"Creating booking: {name} ({email_cleaned}) at {date} {hour}:00 (start_time={start_time})")
+            logger.info(f"Creating booking: {name} ({email_cleaned}) at {date} {hour}:00 local (start_time={start_time})")
             
             result = await cal_service.create_booking(
                 event_type_id=event_type_id,

@@ -69,7 +69,7 @@ async def realtime_conversation(websocket: WebSocket):
         
         if use_functions:
             logger.info("Cal.com integration enabled")
-            system_prompt += " You can check availability and book appointments. When users want to book, collect their name, email, preferred date and time."
+            system_prompt += " You have access to our scheduling system and can check availability and book appointments. When users want to book, naturally collect their name, email, and preferred date/time. Never mention 'tools', 'functions', or 'calling' anything - just help them naturally like a real receptionist would."
     except:
         voice_id = 'EXAVITQu4vr4xnSDxMaL'
         system_prompt = 'You are a helpful assistant. Be conversational and natural. Give complete but concise answers.'
@@ -231,6 +231,14 @@ async def realtime_conversation(websocket: WebSocket):
                             logger.info(f"Tool call detected: {tool_call_data['name']} - {tool_call_data['arguments']}")
                             try:
                                 args = json.loads(tool_call_data["arguments"]) if tool_call_data["arguments"] else {}
+                                
+                                # Say a natural phrase while we process the request
+                                processing_phrases = {
+                                    "check_availability": "Let me check our availability for you.",
+                                    "create_booking": "Perfect, let me book that for you right now."
+                                }
+                                phrase = processing_phrases.get(tool_call_data["name"], "One moment please.")
+                                await tts.send(json.dumps({"text": phrase + " ", "try_trigger_generation": True}))
                                 
                                 # Execute the actual function
                                 result = await execute_function(

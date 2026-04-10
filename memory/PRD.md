@@ -36,26 +36,27 @@ User has an AI agent making platform (Next.js + MongoDB + Twilio) for call bots.
 
 ## What's Been Implemented
 
-### April 10, 2026 - Cal.com Function Calling Integration
-1. **Cal.com Service**: `/backend/cal_service.py` - Full Cal.com API integration
-   - `check_availability()` - Check available time slots
-   - `create_booking()` - Book appointments
-   - `get_event_types()` - List event types
-   - `get_bookings()` - List existing bookings
+### April 10, 2026 - Cal.com Function Calling Integration (COMPLETE)
+1. **Cal.com Service**: `/backend/cal_service.py` - Full Cal.com v2 API integration
+   - `get_slots()` - Get real available time slots from Cal.com
+   - `create_booking()` - Create actual bookings in Cal.com (shows in your calendar!)
+   - Uses `cal-api-version: 2024-06-14` for compatibility
 
 2. **LLM Function Calling**: Updated `server.py` respond() function
    - Groq LLM with tools/function calling support
-   - Two-pass approach: First LLM call detects tool call, executes function, second LLM call verbalizes result
-   - Proper tool message format with `tool_call_id` for Groq API
+   - Non-streaming first call for clean tool detection
+   - Natural phrases before tool execution
 
 3. **Frontend Integration**: Updated `/dashboard/demo/page.js`
    - Fetches Cal.com API key from `/api/integrations/demo-keys`
    - Sends Cal.com config to WebSocket on connection
    - Visual indicator showing "Cal.com booking enabled"
 
-4. **New API Endpoint**: `/api/integrations/demo-keys`
-   - Returns decrypted integration keys for authenticated users
-   - Used by demo page to pass keys to WebSocket
+4. **Configuration Required**:
+   - Cal.com API Key (never expire)
+   - Event Type ID: 3305088 (30 Min Meeting)
+   - Schedule must be linked to event type
+   - Google/Outlook Calendar must be connected and not expired
 
 ### March 30, 2026 - Real-Time Voice Demo
 1. **Demo Page**: `/dashboard/demo` - Test agents with real-time voice

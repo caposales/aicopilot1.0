@@ -317,7 +317,7 @@ async def execute_function(
             # Extract hour number
             time_clean = str(time_str).lower().replace("am", "").replace("pm", "").replace(" ", "").replace(":", "")
             try:
-                hour = int(time_clean[:2] if len(time_clean) >= 2 else time_clean)
+                hour = int(time_clean[:2] if len(time_clean) >= 2 and time_clean[:2].isdigit() else time_clean[:1])
             except:
                 hour = 9
             
@@ -327,12 +327,12 @@ async def execute_function(
             elif is_am and hour == 12:
                 hour = 0
             
-            # Use local time format (Cal.com will use the timeZone parameter)
-            # Convert to Pacific time for the API (add 7 hours to get UTC)
-            utc_hour = (hour + 7) % 24  # Pacific to UTC offset
-            start_time = f"{date}T{utc_hour:02d}:00:00.000Z"
+            # Send local Pacific time - Cal.com uses the timeZone parameter to interpret
+            # We send as if it's UTC but Cal.com will apply the timezone
+            # For Pacific (UTC-7), 5 PM local = 5 PM in the booking
+            start_time = f"{date}T{hour:02d}:00:00.000Z"
             
-            logger.info(f"Creating booking: {name} ({email_cleaned}) at {start_time} (user said {hour}:00 local)")
+            logger.info(f"Creating booking: {name} ({email_cleaned}) at {date} {hour}:00 (start_time={start_time})")
             
             result = await cal_service.create_booking(
                 event_type_id=event_type_id,

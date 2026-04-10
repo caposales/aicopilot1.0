@@ -75,19 +75,20 @@ async def realtime_conversation(websocket: WebSocket):
 
 DATE TODAY: {today}
 
-You are a receptionist. You MUST use the tools provided - never just say you will do something.
-
-WRONG: "Let me check availability" (saying without doing)
-RIGHT: [silently call check_availability tool] then speak the results
+You are a receptionist booking appointments.
 
 FLOW:
-1. User wants appointment → call check_availability → tell them available times
+1. User wants appointment → call check_availability → tell them times
 2. User picks time → ask for name
-3. User gives name → ask for email  
-4. User gives email → call create_booking → confirm
+3. Got name → ask for email  
+4. Got email → call create_booking → confirm booking
+5. User says thank you/done/bye → say goodbye, DO NOT call any more tools
 
-NEVER say "let me check" or "I'll book" without ACTUALLY calling the tool.
-Keep responses to one short sentence."""
+RULES:
+- When user says "thank you", "that's it", "bye" etc → just say goodbye politely
+- Never call tools after the booking is confirmed
+- Keep responses to one short sentence
+- Never mention function names or tools"""
     except:
         voice_id = 'EXAVITQu4vr4xnSDxMaL'
         system_prompt = 'You are a helpful assistant. Be conversational and natural. Give complete but concise answers.'

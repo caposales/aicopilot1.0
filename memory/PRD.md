@@ -4,16 +4,18 @@
 User has an AI agent making platform (Next.js + MongoDB + Twilio) for call bots. They requested:
 1. Embeddable chatbot widget feature
 2. Real-time in-browser voice demo to test agent knowledge and response speed (like a phone call but without Twilio)
-3. Using Deepgram (STT) + OpenAI (LLM) + ElevenLabs (TTS) for the voice demo
+3. Using Deepgram (STT) + Groq LLM + ElevenLabs (TTS) for the voice demo
+4. Ability for AI to execute real actions (e.g., Cal.com booking) via function calling
 
 ## Architecture
 - **Frontend**: Next.js 14 with Tailwind CSS, shadcn/ui components
-- **Backend**: Next.js API routes (catch-all pattern)
-- **Database**: MongoDB
-- **AI**: Emergent Universal API (gpt-5.2 via integrations.emergentagent.com)
+- **Backend**: FastAPI WebSocket server (`server.py`) + Next.js API routes
+- **Database**: MongoDB (`test_database`)
+- **LLM**: Groq (llama-3.1-8b-instant) with tool/function calling
 - **Speech-to-Text**: Deepgram WebSocket API (real-time streaming)
-- **Text-to-Speech**: ElevenLabs API (with browser fallback)
+- **Text-to-Speech**: ElevenLabs WebSocket API (streaming)
 - **Auth**: JWT-based authentication
+- **Integrations**: Cal.com API for appointment booking
 
 ## User Personas
 1. **Business Owner**: Wants to test AI agent responsiveness before going live
@@ -29,9 +31,31 @@ User has an AI agent making platform (Next.js + MongoDB + Twilio) for call bots.
 - [x] AI chat using Emergent LLM API
 - [x] Multi-turn conversation support
 - [x] Test page for previewing chatbots
-- [x] Real-time voice demo page (IN PROGRESS)
+- [x] Real-time voice demo page
+- [x] Cal.com function calling for voice agent (booking appointments)
 
 ## What's Been Implemented
+
+### April 10, 2026 - Cal.com Function Calling Integration
+1. **Cal.com Service**: `/backend/cal_service.py` - Full Cal.com API integration
+   - `check_availability()` - Check available time slots
+   - `create_booking()` - Book appointments
+   - `get_event_types()` - List event types
+   - `get_bookings()` - List existing bookings
+
+2. **LLM Function Calling**: Updated `server.py` respond() function
+   - Groq LLM with tools/function calling support
+   - Two-pass approach: First LLM call detects tool call, executes function, second LLM call verbalizes result
+   - Proper tool message format with `tool_call_id` for Groq API
+
+3. **Frontend Integration**: Updated `/dashboard/demo/page.js`
+   - Fetches Cal.com API key from `/api/integrations/demo-keys`
+   - Sends Cal.com config to WebSocket on connection
+   - Visual indicator showing "Cal.com booking enabled"
+
+4. **New API Endpoint**: `/api/integrations/demo-keys`
+   - Returns decrypted integration keys for authenticated users
+   - Used by demo page to pass keys to WebSocket
 
 ### March 30, 2026 - Real-Time Voice Demo
 1. **Demo Page**: `/dashboard/demo` - Test agents with real-time voice
@@ -61,15 +85,18 @@ User has an AI agent making platform (Next.js + MongoDB + Twilio) for call bots.
 
 ## Prioritized Backlog
 
-### P0 (Critical) - IN PROGRESS
-- Real-time voice demo testing and refinement
+### P0 (Critical) - COMPLETED
+- [x] Real-time voice demo with function calling
+- [x] Cal.com booking integration for voice agent
 
 ### P1 (High Priority)
 - Agent Templates
 - Knowledge Base Upload (PDF, docs)
 - Admin Dashboard
+- Embeddable AI chatbot widget generation
 
 ### P2 (Medium Priority)
+- Twilio telephony integration for real phone numbers
 - Analytics dashboard for conversations
 - Export conversation logs
 - Rate limiting for public endpoints
@@ -80,10 +107,12 @@ User has an AI agent making platform (Next.js + MongoDB + Twilio) for call bots.
 - White-label options
 
 ## Known Issues
-- ElevenLabs TTS requires user to have voices in their account (currently 0 voices - falls back to browser TTS)
-- Deepgram temporary token generation requires higher API key permissions (using direct API key as fallback)
+- ElevenLabs TTS requires user to have voices in their account (currently 0 voices - may cause issues)
+- Deepgram temporary token generation requires higher API key permissions (using direct API key)
+- Browser echo cancellation is imperfect - users should use headphones for best results
 
 ## Next Tasks
-1. User testing of voice demo feature (requires microphone)
-2. Add ElevenLabs voice selection when user has voices
-3. Consider adding Deepgram integration to Integrations page
+1. User testing of voice demo with Cal.com booking (requires microphone)
+2. Add more function calling capabilities (e.g., lead qualification, CRM updates)
+3. Agent Templates feature
+4. Knowledge Base Upload

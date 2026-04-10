@@ -190,7 +190,7 @@ async def realtime_conversation(websocket: WebSocket):
                         timeout=30.0
                     ) as resp:
                         buf = ""
-                        tool_call_data = {"name": "", "arguments": ""}
+                        tool_call_data = {"name": "", "arguments": "", "id": ""}
                         is_tool_call = False
                         
                         async for line in resp.aiter_lines():
@@ -204,42 +204,103 @@ async def realtime_conversation(websocket: WebSocket):
                                     if delta.get("tool_calls"):
                                         is_tool_call = True
                                         tc = delta["tool_calls"][0]
+                                        if tc.get("id"):
+                                            tool_call_data["id"] = tc["id"]
                                         if tc.get("function", {}).get("name"):
                                             tool_call_data["name"] = tc["function"]["name"]
                                         if tc.get("function", {}).get("arguments"):
                                             tool_call_data["arguments"] += tc["function"]["arguments"]
                                     
-                                    # Regular content
-                                    c = delta.get("content", "")
-                                    if c:
-                                        full_response += c
-                                        buf += c
-                                        if ' ' in buf or any(p in buf for p in '.!?,'):
-                                            await tts.send(json.dumps({"text": buf, "try_trigger_generation": True}))
-                                            buf = ""
+                                    # Regular content (only if NOT a tool call)
+                                    if not is_tool_call:
+                                        c = delta.get("content", "")
+                                        if c:
+                                            full_response += c
+                                            buf += c
+                                            if ' ' in buf or any(p in buf for p in '.!?,'):
+                                                await tts.send(json.dumps({"text": buf, "try_trigger_generation": True}))
+                                                buf = ""
                                 except: pass
                         
-                        if buf and not stop_tts:
+                        # Send remaining buffer if not a tool call
+                        if buf and not stop_tts and not is_tool_call:
                             await tts.send(json.dumps({"text": buf, "try_trigger_generation": True}))
                         
-                        # Handle tool call if detected
-                        if is_tool_call and tool_call_data["name"] and cal_service:
-                            logger.info(f"Tool call: {tool_call_data['name']} - {tool_call_data['arguments']}")
+                        # Handle tool call if detected - execute function and get verbal response
+                        if is_tool_call and tool_call_data["name"] and cal_service and not stop_tts:
+                            logger.info(f"Tool call detected: {tool_call_data['name']} - {tool_call_data['arguments']}")
                             try:
                                 args = json.loads(tool_call_data["arguments"]) if tool_call_data["arguments"] else {}
+                                
+                                # Execute the actual function
                                 result = await execute_function(
                                     tool_call_data["name"],
                                     args,
                                     cal_service,
                                     cal_event_type_id
                                 )
-                                logger.info(f"Function result: {result}")
+                                logger.info(f"Function executed, result: {result}")
                                 
-                                # Speak the function result
-                                await tts.send(json.dumps({"text": result, "try_trigger_generation": True}))
-                                full_response = result
+                                # Now make a second LLM call to verbalize the result naturally
+                                tool_messages = messages + [
+                                    {
+                                        "role": "assistant",
+                                        "content": None,
+                                        "tool_calls": [{
+                                            "id": tool_call_data["id"] or "call_1",
+                                            "type": "function",
+                                            "function": {
+                                                "name": tool_call_data["name"],
+                                                "arguments": tool_call_data["arguments"]
+                                            }
+                                        }]
+                                    },
+                                    {
+                                        "role": "tool",
+                                        "tool_call_id": tool_call_data["id"] or "call_1",
+                                        "content": result
+                                    }
+                                ]
+                                
+                                # Second LLM call to generate verbal response
+                                second_payload = {
+                                    "model": "llama-3.1-8b-instant",
+                                    "messages": tool_messages,
+                                    "max_tokens": 200,
+                                    "stream": True
+                                }
+                                
+                                async with client.stream(
+                                    "POST",
+                                    "https://api.groq.com/openai/v1/chat/completions",
+                                    headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
+                                    json=second_payload,
+                                    timeout=30.0
+                                ) as resp2:
+                                    buf2 = ""
+                                    async for line2 in resp2.aiter_lines():
+                                        if should_stop or stop_tts: break
+                                        if line2.startswith("data: ") and "[DONE]" not in line2:
+                                            try:
+                                                chunk2 = json.loads(line2[6:])
+                                                c2 = chunk2.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                                                if c2:
+                                                    full_response += c2
+                                                    buf2 += c2
+                                                    if ' ' in buf2 or any(p in buf2 for p in '.!?,'):
+                                                        await tts.send(json.dumps({"text": buf2, "try_trigger_generation": True}))
+                                                        buf2 = ""
+                                            except: pass
+                                    
+                                    if buf2 and not stop_tts:
+                                        await tts.send(json.dumps({"text": buf2, "try_trigger_generation": True}))
+                                
                             except Exception as e:
                                 logger.error(f"Error executing function: {e}")
+                                # Fallback - tell user there was an error
+                                error_msg = "I'm sorry, I had trouble processing that request. Could you try again?"
+                                await tts.send(json.dumps({"text": error_msg, "try_trigger_generation": True}))
+                                full_response = error_msg
                 
                 await tts.send(json.dumps({"text": ""}))
                 

@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react'
 import { toast } from 'sonner'
-import { Phone, PhoneOff, Loader2, Mic, Volume2 } from 'lucide-react'
+import { Phone, PhoneOff, Loader2, Mic, Volume2, Calendar } from 'lucide-react'
 
 export default function AgentDemoPage() {
   const [agents, setAgents] = useState([])
@@ -11,6 +11,7 @@ export default function AgentDemoPage() {
   const [isCallActive, setIsCallActive] = useState(false)
   const [status, setStatus] = useState('idle')
   const [callDuration, setCallDuration] = useState(0)
+  const [integrationKeys, setIntegrationKeys] = useState(null)
 
   // Refs
   const wsRef = useRef(null)
@@ -23,6 +24,7 @@ export default function AgentDemoPage() {
 
   useEffect(() => {
     fetchAgents()
+    fetchIntegrationKeys()
   }, [])
 
   // Cleanup on unmount
@@ -83,6 +85,18 @@ export default function AgentDemoPage() {
     }
   }
 
+  const fetchIntegrationKeys = async () => {
+    try {
+      const res = await fetch('/api/integrations/demo-keys', { headers: getAuthHeaders() })
+      if (res.ok) {
+        const data = await res.json()
+        setIntegrationKeys(data)
+      }
+    } catch (e) {
+      console.error('Failed to fetch integration keys:', e)
+    }
+  }
+
   const startCall = async () => {
     if (!selectedAgent || isEndingRef.current) return
     
@@ -125,11 +139,20 @@ export default function AgentDemoPage() {
         ws.close()
         return
       }
-      ws.send(JSON.stringify({
+      // Send config including Cal.com API key for function calling
+      const config = {
         voiceId: selectedAgent.voiceId || 'EXAVITQu4vr4xnSDxMaL',
         systemPrompt: selectedAgent.customPrompt || 'You are a helpful assistant. Be concise - 1 sentence max.',
         initialMessage: selectedAgent.initialMessage || 'Hello!'
-      }))
+      }
+      
+      // Add Cal.com integration if available
+      if (integrationKeys?.calcom) {
+        config.calApiKey = integrationKeys.calcom
+        config.calEventTypeId = selectedAgent.calEventTypeId || 1
+      }
+      
+      ws.send(JSON.stringify(config))
     }
     
     ws.onmessage = (event) => {
@@ -321,6 +344,14 @@ export default function AgentDemoPage() {
       <p className="mt-6 text-gray-500 text-sm">
         {isCallActive ? 'Tap to end' : 'Tap to call'}
       </p>
+      
+      {/* Cal.com integration indicator */}
+      {!isCallActive && integrationKeys?.calcom && (
+        <div className="mt-4 flex items-center gap-2 text-green-400 text-xs">
+          <Calendar className="w-4 h-4" />
+          <span>Cal.com booking enabled</span>
+        </div>
+      )}
     </div>
   )
 }

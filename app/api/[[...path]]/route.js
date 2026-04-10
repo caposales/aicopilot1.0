@@ -768,6 +768,30 @@ if (route === '/voices' && method === 'GET') {
       return jsonResponse({ success: true })
     }
 
+    // Get decrypted integration keys for demo (internal use only)
+    if (route === '/integrations/demo-keys' && method === 'GET') {
+      if (!user) return errorResponse('Unauthorized', 401)
+      
+      const integrations = await db.collection('integrations').findOne({ workspaceId: user.workspaceId })
+      
+      if (!integrations) {
+        return jsonResponse({ 
+          deepgram: null, 
+          elevenlabs: null, 
+          groq: null,
+          calcom: null 
+        })
+      }
+      
+      // Return decrypted keys for WebSocket connection (only for authenticated users)
+      return jsonResponse({
+        deepgram: integrations.deepgram?.apiKey ? decrypt(integrations.deepgram.apiKey) : null,
+        elevenlabs: integrations.elevenlabs?.apiKey ? decrypt(integrations.elevenlabs.apiKey) : null,
+        groq: integrations.groq?.apiKey ? decrypt(integrations.groq.apiKey) : null,
+        calcom: integrations.calcom?.apiKey ? decrypt(integrations.calcom.apiKey) : null
+      })
+    }
+
     // ====== CALL LOGS ======
     
     // List call logs

@@ -202,6 +202,10 @@ RULES:
                         choice = result.get("choices", [{}])[0]
                         message = choice.get("message", {})
                         
+                        # Log the full response to debug
+                        logger.info(f"LLM response - tool_calls: {bool(message.get('tool_calls'))}, content: {message.get('content', '')[:100] if message.get('content') else 'None'}")
+                        
+                        # ALWAYS check for tool_calls first - ignore any content if tool_calls exist
                         if message.get("tool_calls") and not stop_tts:
                             # Tool call detected - execute it
                             tc = message["tool_calls"][0]

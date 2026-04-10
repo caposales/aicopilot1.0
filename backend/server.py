@@ -68,7 +68,9 @@ async def realtime_conversation(websocket: WebSocket):
         use_functions = cal_service is not None
         
         if use_functions:
-            logger.info(f"Cal.com integration enabled with event_type_id={cal_event_type_id}")
+            # Fetch user's timezone from Cal.com
+            await cal_service.get_user_timezone()
+            logger.info(f"Cal.com integration enabled with event_type_id={cal_event_type_id}, timezone={cal_service.user_timezone}")
             from datetime import datetime
             today = datetime.now().strftime("%Y-%m-%d")
             system_prompt += f""" 

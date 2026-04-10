@@ -4,8 +4,22 @@ import httpx
 import logging
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
+
+# Timezone offset mapping (hours from UTC)
+TIMEZONE_OFFSETS = {
+    "America/Los_Angeles": -7,  # PDT
+    "America/Denver": -6,       # MDT
+    "America/Chicago": -5,      # CDT
+    "America/New_York": -4,     # EDT
+    "America/Phoenix": -7,      # MST (no DST)
+    "Europe/London": 1,         # BST
+    "Europe/Paris": 2,          # CEST
+    "Asia/Tokyo": 9,
+    "Australia/Sydney": 10,
+}
 
 class CalComService:
     def __init__(self, api_key: str):
@@ -16,6 +30,33 @@ class CalComService:
             "Authorization": f"Bearer {api_key}",
             "cal-api-version": "2024-09-04"
         }
+        self.user_timezone = "America/Los_Angeles"  # Default, will be fetched
+    
+    async def get_user_timezone(self) -> str:
+        """Fetch the user's timezone from Cal.com"""
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"{self.base_url}/me",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "cal-api-version": "2024-06-14"
+                    },
+                    timeout=10
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    tz = data.get("data", {}).get("timeZone", "America/Los_Angeles")
+                    self.user_timezone = tz
+                    logger.info(f"User timezone: {tz}")
+                    return tz
+        except Exception as e:
+            logger.error(f"Error getting user timezone: {e}")
+        return self.user_timezone
+    
+    def get_utc_offset(self) -> int:
+        """Get UTC offset hours for user's timezone"""
+        return TIMEZONE_OFFSETS.get(self.user_timezone, -7)  # Default to Pacific
     
     async def get_event_types(self) -> List[Dict[str, Any]]:
         """Get all event types for the user"""
@@ -330,15 +371,17 @@ async def execute_function(
             elif is_am and hour == 12:
                 hour = 0
             
-            # Convert Pacific time to UTC (add 7 hours for PDT)
-            # Handle date rollover
+            # Convert local time to UTC using the Cal.com user's timezone
             from datetime import datetime as dt, timedelta
             local_dt = dt.strptime(f"{date}T{hour:02d}:00:00", "%Y-%m-%dT%H:%M:%S")
-            utc_dt = local_dt + timedelta(hours=7)  # Pacific to UTC
+            
+            # Get UTC offset for user's timezone (negative means behind UTC)
+            utc_offset = cal_service.get_utc_offset()
+            utc_dt = local_dt - timedelta(hours=utc_offset)  # Subtract offset to get UTC
             
             start_time = utc_dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
             
-            logger.info(f"Creating booking: {name} ({email_cleaned}) - User said {hour}:00 Pacific, sending {start_time} UTC")
+            logger.info(f"Creating booking: {name} ({email_cleaned}) - User said {hour}:00 {cal_service.user_timezone}, sending {start_time} UTC")
             
             result = await cal_service.create_booking(
                 event_type_id=event_type_id,

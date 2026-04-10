@@ -113,7 +113,17 @@ export default function AgentDemoPage() {
       
       setIsCallActive(true)
       setCallDuration(0)
-      callTimerRef.current = setInterval(() => setCallDuration(p => p + 1), 1000)
+      callTimerRef.current = setInterval(() => {
+        setCallDuration(p => {
+          // Auto-end call after 90 seconds (1m30s)
+          if (p >= 90) {
+            endCall()
+            toast.info('Demo call ended - 90 second limit reached')
+            return p
+          }
+          return p + 1
+        })
+      }, 1000)
       
       connectRealtime(stream)
       

@@ -283,10 +283,19 @@ async def execute_function(
         if not time_str:
             return "What time would you prefer?"
         
+        # Convert spoken email to actual email format
+        # "ethan jasper at gmail dot com" -> "ethanjasper@gmail.com"
+        email_cleaned = str(email).lower().strip()
+        email_cleaned = email_cleaned.replace(" at ", "@").replace("at ", "@").replace(" at", "@")
+        email_cleaned = email_cleaned.replace(" dot ", ".").replace("dot ", ".").replace(" dot", ".")
+        email_cleaned = email_cleaned.replace(" ", "")  # Remove remaining spaces
+        
         # Validate email format
-        if "@" not in str(email) or "." not in str(email):
-            logger.warning(f"Invalid email format: {email}")
-            return "I didn't catch that email correctly. Could you spell it out for me?"
+        if "@" not in email_cleaned or "." not in email_cleaned:
+            logger.warning(f"Invalid email format after cleanup: {email} -> {email_cleaned}")
+            return "I didn't catch that email correctly. Could you say it like: john smith at gmail dot com?"
+        
+        logger.info(f"Email converted: '{email}' -> '{email_cleaned}'")
         
         try:
             # Parse time to proper format
@@ -309,13 +318,13 @@ async def execute_function(
             
             start_time = f"{date}T{hour:02d}:00:00Z"
             
-            logger.info(f"Creating booking: {name} ({email}) at {start_time}")
+            logger.info(f"Creating booking: {name} ({email_cleaned}) at {start_time}")
             
             result = await cal_service.create_booking(
                 event_type_id=event_type_id,
                 start_time=start_time,
                 name=name,
-                email=email
+                email=email_cleaned
             )
             
             if result.get("success"):

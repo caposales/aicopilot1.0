@@ -10,6 +10,7 @@ import asyncio
 import websockets
 import json
 import time
+from cal_service import CalComService, BOOKING_FUNCTIONS, execute_function
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -59,10 +60,23 @@ async def realtime_conversation(websocket: WebSocket):
         # Add conversational guidance
         system_prompt = base_prompt + " Be conversational and natural. Give complete but concise answers. If the user asks a follow-up question, smoothly address it."
         initial_message = config.get('initialMessage', 'Hello!')
+        
+        # Get Cal.com config for function calling
+        cal_api_key = config.get('calApiKey')
+        cal_event_type_id = config.get('calEventTypeId', 1)  # Default event type ID
+        cal_service = CalComService(cal_api_key) if cal_api_key else None
+        use_functions = cal_service is not None
+        
+        if use_functions:
+            logger.info("Cal.com integration enabled")
+            system_prompt += " You can check availability and book appointments. When users want to book, collect their name, email, preferred date and time."
     except:
         voice_id = 'EXAVITQu4vr4xnSDxMaL'
         system_prompt = 'You are a helpful assistant. Be conversational and natural. Give complete but concise answers.'
         initial_message = 'Hello!'
+        cal_service = None
+        cal_event_type_id = 1
+        use_functions = False
     
     state = {
         "audio_playing_until": 0,
@@ -155,21 +169,48 @@ async def realtime_conversation(websocket: WebSocket):
                 
                 audio_task = asyncio.create_task(forward())
                 
-                # Stream LLM from Groq
+                # Stream LLM from Groq - with function calling if Cal.com enabled
+                llm_payload = {
+                    "model": "llama-3.1-8b-instant",
+                    "messages": messages,
+                    "max_tokens": 300,
+                    "stream": True
+                }
+                
+                if use_functions:
+                    llm_payload["tools"] = BOOKING_FUNCTIONS
+                    llm_payload["tool_choice"] = "auto"
+                
                 async with httpx.AsyncClient() as client:
                     async with client.stream(
                         "POST",
                         "https://api.groq.com/openai/v1/chat/completions",
                         headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
-                        json={"model": "llama-3.1-8b-instant", "messages": messages, "max_tokens": 300, "stream": True},
+                        json=llm_payload,
                         timeout=30.0
                     ) as resp:
                         buf = ""
+                        tool_call_data = {"name": "", "arguments": ""}
+                        is_tool_call = False
+                        
                         async for line in resp.aiter_lines():
                             if should_stop or stop_tts: break
                             if line.startswith("data: ") and "[DONE]" not in line:
                                 try:
-                                    c = json.loads(line[6:]).get("choices", [{}])[0].get("delta", {}).get("content", "")
+                                    chunk = json.loads(line[6:])
+                                    delta = chunk.get("choices", [{}])[0].get("delta", {})
+                                    
+                                    # Check for tool calls
+                                    if delta.get("tool_calls"):
+                                        is_tool_call = True
+                                        tc = delta["tool_calls"][0]
+                                        if tc.get("function", {}).get("name"):
+                                            tool_call_data["name"] = tc["function"]["name"]
+                                        if tc.get("function", {}).get("arguments"):
+                                            tool_call_data["arguments"] += tc["function"]["arguments"]
+                                    
+                                    # Regular content
+                                    c = delta.get("content", "")
                                     if c:
                                         full_response += c
                                         buf += c
@@ -177,8 +218,28 @@ async def realtime_conversation(websocket: WebSocket):
                                             await tts.send(json.dumps({"text": buf, "try_trigger_generation": True}))
                                             buf = ""
                                 except: pass
+                        
                         if buf and not stop_tts:
                             await tts.send(json.dumps({"text": buf, "try_trigger_generation": True}))
+                        
+                        # Handle tool call if detected
+                        if is_tool_call and tool_call_data["name"] and cal_service:
+                            logger.info(f"Tool call: {tool_call_data['name']} - {tool_call_data['arguments']}")
+                            try:
+                                args = json.loads(tool_call_data["arguments"]) if tool_call_data["arguments"] else {}
+                                result = await execute_function(
+                                    tool_call_data["name"],
+                                    args,
+                                    cal_service,
+                                    cal_event_type_id
+                                )
+                                logger.info(f"Function result: {result}")
+                                
+                                # Speak the function result
+                                await tts.send(json.dumps({"text": result, "try_trigger_generation": True}))
+                                full_response = result
+                            except Exception as e:
+                                logger.error(f"Error executing function: {e}")
                 
                 await tts.send(json.dumps({"text": ""}))
                 

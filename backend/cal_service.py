@@ -236,23 +236,34 @@ async def execute_function(
                 # Get slots for this date
                 day_slots = slots.get(date, [])
                 if day_slots:
-                    # Format a few available times nicely
+                    # Format available times nicely - convert UTC to Pacific (UTC-7)
                     times = []
-                    for slot in day_slots[:4]:
+                    seen_hours = set()
+                    for slot in day_slots[:8]:  # Check more slots to get variety
                         time_str = slot.get("time", "")
                         if time_str:
                             try:
                                 dt = datetime.fromisoformat(time_str.replace("Z", "+00:00"))
-                                # Convert to local time display
-                                hour = dt.hour
-                                if hour == 0:
+                                # Convert UTC to Pacific (subtract 7 hours)
+                                local_hour = (dt.hour - 7) % 24
+                                
+                                # Skip if we already have this hour
+                                if local_hour in seen_hours:
+                                    continue
+                                seen_hours.add(local_hour)
+                                
+                                # Format nicely
+                                if local_hour == 0:
                                     times.append("12 AM")
-                                elif hour < 12:
-                                    times.append(f"{hour} AM")
-                                elif hour == 12:
+                                elif local_hour < 12:
+                                    times.append(f"{local_hour} AM")
+                                elif local_hour == 12:
                                     times.append("12 PM")
                                 else:
-                                    times.append(f"{hour - 12} PM")
+                                    times.append(f"{local_hour - 12} PM")
+                                
+                                if len(times) >= 4:
+                                    break
                             except:
                                 pass
                     
@@ -316,9 +327,12 @@ async def execute_function(
             elif is_am and hour == 12:
                 hour = 0
             
-            start_time = f"{date}T{hour:02d}:00:00Z"
+            # Use local time format (Cal.com will use the timeZone parameter)
+            # Convert to Pacific time for the API (add 7 hours to get UTC)
+            utc_hour = (hour + 7) % 24  # Pacific to UTC offset
+            start_time = f"{date}T{utc_hour:02d}:00:00.000Z"
             
-            logger.info(f"Creating booking: {name} ({email_cleaned}) at {start_time}")
+            logger.info(f"Creating booking: {name} ({email_cleaned}) at {start_time} (user said {hour}:00 local)")
             
             result = await cal_service.create_booking(
                 event_type_id=event_type_id,

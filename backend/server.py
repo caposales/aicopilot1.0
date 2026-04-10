@@ -69,10 +69,14 @@ async def realtime_conversation(websocket: WebSocket):
         
         if use_functions:
             logger.info(f"Cal.com integration enabled with event_type_id={cal_event_type_id}")
-            system_prompt += """ You have access to our scheduling system. When users want to book:
-1. Collect their name, email, and preferred date/time naturally
-2. When you need to check availability or create a booking, just DO IT silently - never say "I'll check" or "Let me call" or mention any function/tool names
-3. Act like a real receptionist - you just know the schedule, you don't need to announce that you're looking it up"""
+            system_prompt += """ You can check availability and book appointments.
+
+CRITICAL RULES:
+- When you decide to use a tool, output NOTHING. No text at all. Just call the tool silently.
+- NEVER say "I'll check", "Let me look", "calling function", or ANY text before using a tool.
+- NEVER mention dates like "2024" or function names.
+- After getting tool results, respond naturally with the information.
+- Collect name, email, date, and time naturally through conversation."""
     except:
         voice_id = 'EXAVITQu4vr4xnSDxMaL'
         system_prompt = 'You are a helpful assistant. Be conversational and natural. Give complete but concise answers.'
@@ -193,9 +197,10 @@ async def realtime_conversation(websocket: WebSocket):
                         json=llm_payload,
                         timeout=30.0
                     ) as resp:
-                        buf = ""
+                        content_buffer = ""
                         tool_call_data = {"name": "", "arguments": "", "id": ""}
                         is_tool_call = False
+                        chunks_received = 0
                         
                         async for line in resp.aiter_lines():
                             if should_stop or stop_tts: break
@@ -203,10 +208,12 @@ async def realtime_conversation(websocket: WebSocket):
                                 try:
                                     chunk = json.loads(line[6:])
                                     delta = chunk.get("choices", [{}])[0].get("delta", {})
+                                    chunks_received += 1
                                     
                                     # Check for tool calls
                                     if delta.get("tool_calls"):
                                         is_tool_call = True
+                                        content_buffer = ""  # Discard any buffered content
                                         tc = delta["tool_calls"][0]
                                         if tc.get("id"):
                                             tool_call_data["id"] = tc["id"]
@@ -215,21 +222,22 @@ async def realtime_conversation(websocket: WebSocket):
                                         if tc.get("function", {}).get("arguments"):
                                             tool_call_data["arguments"] += tc["function"]["arguments"]
                                     
-                                    # Stream content immediately (for non-tool responses)
+                                    # Buffer content - only start TTS after we're sure it's not a tool call
                                     if not is_tool_call:
                                         c = delta.get("content", "")
                                         if c:
-                                            full_response += c
-                                            buf += c
-                                            # Send chunks for natural speech
-                                            if ' ' in buf or any(p in buf for p in '.!?,'):
-                                                await tts.send(json.dumps({"text": buf, "try_trigger_generation": True}))
-                                                buf = ""
+                                            content_buffer += c
+                                            # Start streaming to TTS after ~3 chunks (tool calls appear in first 1-2 chunks)
+                                            if chunks_received >= 3 and len(content_buffer) > 10:
+                                                await tts.send(json.dumps({"text": content_buffer, "try_trigger_generation": True}))
+                                                full_response += content_buffer
+                                                content_buffer = ""
                                 except: pass
                         
-                        # Send remaining buffer
-                        if buf and not stop_tts and not is_tool_call:
-                            await tts.send(json.dumps({"text": buf, "try_trigger_generation": True}))
+                        # Send remaining buffered content
+                        if content_buffer and not stop_tts and not is_tool_call:
+                            await tts.send(json.dumps({"text": content_buffer, "try_trigger_generation": True}))
+                            full_response += content_buffer
                         
                         # Handle tool call if detected
                         if is_tool_call and tool_call_data["name"] and cal_service and not stop_tts:
